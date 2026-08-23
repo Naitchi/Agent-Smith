@@ -1,6 +1,5 @@
-def __repr__() -> None:
-    print("Hello from agent-smith!")
-
+def __repr__(message: str):
+    return f"{message}"
 
 if __name__ == "__main__":
-    __repr__()
+    print(__repr__("i will fuck all my homies"))

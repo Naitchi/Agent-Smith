@@ -2,7 +2,7 @@ install:
 	uv sync
 
 run:
-	uv sync
+# 	uv sync
 	uv run -m src
 
 clean:
