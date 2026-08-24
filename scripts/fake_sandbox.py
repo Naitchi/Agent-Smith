@@ -1,16 +1,9 @@
-"""Checklist §0.6 — mock #1: B → A.
-
-Naive stand-in for the real `Sandbox`. No security, no MCP tools, no
-timeout/RAM limits. Just enough (SandboxProtocol-compatible) for A to write
-and test the whole AgentLoop before B's real sandbox exists.
-
-NEVER use this for grading/exam — it has zero restrictions.
-"""
-
 import contextlib
 import io
+from typing import Any, Dict
 
-from agent_smith.contract import ExecutionResult
+from schemas import SandboxConfig
+from schemas.contract_model import ExecutionResult
 
 
 class _FinalAnswer(Exception):
@@ -19,8 +12,10 @@ class _FinalAnswer(Exception):
 
 
 class FakeSandbox:
-    def __init__(self) -> None:
-        self._ns: dict = {"final_answer": self._final_answer}
+    def __init__(self, config: SandboxConfig | None = None) -> None:
+        self.config = config
+        self._ns: Dict[str, Any] = {}
+        self._ns.update({"final_answer": self._final_answer})
 
     def _final_answer(self, answer: str) -> None:
         raise _FinalAnswer(answer)
@@ -29,12 +24,16 @@ class FakeSandbox:
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out):
-                exec(code, self._ns)  # noqa: S102 — deliberately naive, see docstring
+                exec(code, self._ns)
             return ExecutionResult(stdout=out.getvalue())
         except _FinalAnswer as fa:
-            return ExecutionResult(stdout=out.getvalue(), final_answer=str(fa.value))
-        except Exception as e:  # noqa: BLE001 — feedback to the LLM, not a crash
-            return ExecutionResult(stdout=out.getvalue(), error=f"{type(e).__name__}: {e}")
+            return ExecutionResult(
+                stdout=out.getvalue(), final_answer=str(fa.value)
+            )
+        except Exception as e:
+            return ExecutionResult(
+                stdout=out.getvalue(), error=f"{type(e).__name__}: {e}"
+            )
 
     def get_manual(self) -> str:
         return (

@@ -5,15 +5,15 @@ Sends 3 hardcoded code blocks to a real `Sandbox` and prints each
 loop at all.
 
 Usage:
-    uv run python scripts/fake_agent.py
+    uv run python -m scripts.fake_agent
 
 Requires B's `Sandbox` + `SandboxConfig` to exist (agent_smith.sandbox /
 agent_smith.schemas). Swap CODE_BLOCKS below to target whatever you're
 currently testing (imports allowlist, FS allowlist, persistence, timeout...).
 """
 
-from agent_smith.schemas import SandboxConfig
-from agent_smith.sandbox import Sandbox
+from schemas import SandboxConfig
+from scripts.fake_sandbox import FakeSandbox
 
 CODE_BLOCKS = [
     # 1. basic execution + stdout
@@ -26,7 +26,7 @@ CODE_BLOCKS = [
 
 
 def main() -> None:
-    sandbox = Sandbox(SandboxConfig())
+    sandbox = FakeSandbox(SandboxConfig())
     try:
         for i, code in enumerate(CODE_BLOCKS, start=1):
             print(f"--- block {i} ---\n{code}\n")
