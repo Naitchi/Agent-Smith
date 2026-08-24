@@ -27,3 +27,7 @@ Your README.md must include:
 • Benchmark results and analysis
 
 Your README must be written in English.
+
+resources:
+- [sandbox design](https://www.youtube.com/watch?v=sL_syMmRkoU)
+- [multiprocessing](https://docs.python.org/3/library/multiprocessing.html)
