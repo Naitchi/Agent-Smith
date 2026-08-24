@@ -1,7 +1,13 @@
+from contextlib import redirect_stdout, redirect_stderr
 from multiprocessing import Process, Queue
 from typing import Any, Dict
+from types import FrameType
 import resource
+import signal
+import socket
+import time
 import ast
+import io
 
 from schemas import ExecutionResult
 from schemas import SandboxConfig
@@ -22,40 +28,111 @@ class Sandbox(SandboxConfig):
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.ImportFrom)
-                and node.module not in self._ALLOWED_IMPORTS
+                and node.module not in self.config.authorized_imports
             ):
                 return False
             elif isinstance(node, ast.Call) and (
                 (
                     isinstance(node.func, ast.Name)
-                    and node.func.id not in self._ALLOWED_BUILTINS
+                    and node.func.id not in self.config.authorized_builtins
                 )
                 or (
                     isinstance(node.func, ast.Attribute)
-                    and node.func.attr not in self._ALLOWED_ATTRIBUTES
+                    and node.func.attr not in self.config.authorized_attributes
                 )
             ):
                 return False
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name not in self._ALLOWED_IMPORTS:
+                    if alias.name not in self.config.authorized_imports:
                         return False
         return True
+
+    @staticmethod
+    def _timeout_handler(signum: int, frame: FrameType | None) -> None:
+        raise TimeoutError
+
+    def _get_stdout_stderr(
+        self, stdout_buf: io.StringIO, stderr_buf: io.StringIO
+    ) -> tuple[str, str, bool]:
+        stdout = stdout_buf.getvalue()[: self.config.max_output_length]
+        stderr = stderr_buf.getvalue()[: self.config.max_output_length]
+        truncated = (
+            len(stdout_buf.getvalue()) > self.config.max_output_length
+            or len(stderr_buf.getvalue()) > self.config.max_output_length
+        )
+        return stdout, stderr, truncated
+
+    @staticmethod
+    def _blocked_call(*args: Any, **kwargs: Any) -> None:
+        raise PermissionError("Network access is disabled in the sandbox.")
 
     def _worker(
         self, code: str, state: Dict[str, Any], queue: Queue[ExecutionResult]
     ) -> None:
+        socket.socket = self._blocked_call
+        signal.signal(signal.SIGTERM, self._timeout_handler)
         limit_bytes = self.config.max_memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+        stderr_buf = io.StringIO()
+        stdout_buf = io.StringIO()
 
+        start = time.time()
         try:
-            exec(code, state)
+            with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+                exec(code, state)
+        except TimeoutError:
+            stdout, stderr, truncated = self._get_stdout_stderr(
+                stdout_buf, stderr_buf
+            )
+            queue.put(
+                ExecutionResult(
+                    stdout=stdout,
+                    stderr=stderr,
+                    error="Execution timed out.",
+                    timed_out=True,
+                    truncated=truncated,
+                    duration_ms=(time.time() - start) * 1000,
+                )
+            )
         except MemoryError:
-            queue.put(ExecutionResult(error="Memory limit exceeded."))
+            stdout, stderr, truncated = self._get_stdout_stderr(
+                stdout_buf, stderr_buf
+            )
+            queue.put(
+                ExecutionResult(
+                    stdout=stdout,
+                    stderr=stderr,
+                    error="Memory limit exceeded.",
+                    truncated=truncated,
+                    duration_ms=(time.time() - start) * 1000,
+                )
+            )
         except Exception as e:
-            queue.put(ExecutionResult(error=str(e)))
+            stdout, stderr, truncated = self._get_stdout_stderr(
+                stdout_buf, stderr_buf
+            )
+            queue.put(
+                ExecutionResult(
+                    stdout=stdout,
+                    stderr=stderr,
+                    error=str(e),
+                    truncated=truncated,
+                    duration_ms=(time.time() - start) * 1000,
+                )
+            )
         else:
-            queue.put(ExecutionResult())
+            stdout, stderr, truncated = self._get_stdout_stderr(
+                stdout_buf, stderr_buf
+            )
+            queue.put(
+                ExecutionResult(
+                    stdout=stdout,
+                    stderr=stderr,
+                    truncated=truncated,
+                    duration_ms=(time.time() - start) * 1000,
+                )
+            )
 
     def execute(self, code: str) -> ExecutionResult:
         q: Queue[ExecutionResult] = Queue()
@@ -65,152 +142,18 @@ class Sandbox(SandboxConfig):
             return ExecutionResult(
                 error="Code contains disallowed operations."
             )
+
         p.start()
         p.join(timeout=self.config.max_execution_time_seconds)
         if p.is_alive():
             p.terminate()
-            return ExecutionResult(error="Execution timed out.")
+            p.join(timeout=1)
+            p.kill()
+            if not q.empty():
+                return q.get()
+            return ExecutionResult(
+                error="Execution timed out.",
+                timed_out=True,
+                duration_ms=self.config.max_execution_time_seconds * 1000,
+            )
         return q.get()
-
-    _ALLOWED_BUILTINS = {
-        "bool",
-        "int",
-        "float",
-        "complex",
-        "str",
-        "bytes",
-        "bytearray",
-        "list",
-        "tuple",
-        "dict",
-        "set",
-        "frozenset",
-        "slice",
-        "range",
-        "object",
-        "type",
-        "isinstance",
-        "issubclass",
-        "callable",
-        "iter",
-        "next",
-        "enumerate",
-        "zip",
-        "map",
-        "filter",
-        "reversed",
-        "sorted",
-        "sum",
-        "min",
-        "max",
-        "all",
-        "any",
-        "len",
-        "abs",
-        "round",
-        "divmod",
-        "pow",
-        "repr",
-        "format",
-        "ascii",
-        "chr",
-        "ord",
-        "bin",
-        "oct",
-        "hex",
-        "hash",
-        "super",
-        "property",
-        "staticmethod",
-        "classmethod",
-        "print",
-        "Exception",
-        "BaseException",
-        "ValueError",
-        "TypeError",
-        "KeyError",
-        "IndexError",
-        "StopIteration",
-        "StopAsyncIteration",
-        "RuntimeError",
-        "AttributeError",
-        "NotImplementedError",
-        "ImportError",
-        "ModuleNotFoundError",
-        "NameError",
-        "ZeroDivisionError",
-        "ArithmeticError",
-        "OverflowError",
-        "OSError",
-        "FileNotFoundError",
-        "PermissionError",
-        "TimeoutError",
-        "MemoryError",
-        "RecursionError",
-        "AssertionError",
-        "LookupError",
-        "UnicodeError",
-        "GeneratorExit",
-        "KeyboardInterrupt",
-        "SystemExit",
-    }
-
-    _ALLOWED_ATTRIBUTES = {
-        "__class__",
-        "__bases__",
-        "__base__",
-        "__mro__",
-        "__subclasses__",
-        "__globals__",
-        "__reduce__",
-        "__reduce_ex__",
-        "__init_subclass__",
-        "__init__",
-        "__new__",
-        "__call__",
-        "__str__",
-        "__repr__",
-        "__format__",
-        "__sizeof__",
-        "__dir__",
-        "__doc__",
-        "__module__",
-        "__annotations__",
-        "__kwdefaults__",
-        "__defaults__",
-        "__code__",
-        "__closure__",
-        "__func__",
-        "__self__",
-        "__dict__",
-        "__weakref__",
-        "__slots__",
-        "__getattribute__",
-    }
-
-    _ALLOWED_IMPORTS = {
-        "math",
-        "random",
-        "datetime",
-        "time",
-        "itertools",
-        "functools",
-        "collections",
-        "operator",
-        "string",
-        "re",
-        "json",
-        "decimal",
-        "fractions",
-        "statistics",
-        "heapq",
-        "bisect",
-        "array",
-        "copy",
-        "types",
-        "weakref",
-        "enum",
-        "contextlib",
-        "abc",
-        "typing",
-    }
