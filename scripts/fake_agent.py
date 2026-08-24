@@ -26,7 +26,7 @@ CODE_BLOCKS = [
 
 
 def main() -> None:
-    sandbox = FakeSandbox(SandboxConfig())
+    sandbox = FakeSandbox()
     try:
         for i, code in enumerate(CODE_BLOCKS, start=1):
             print(f"--- block {i} ---\n{code}\n")
@@ -34,7 +34,8 @@ def main() -> None:
             print(result.model_dump_json(indent=2))
             print()
             if result.final_answer is not None:
-                print(f"final_answer received: {result.final_answer!r} — stopping.")
+                print(f"final_answer received: {result.final_answer!r} \
+                    — stopping.")
                 break
     finally:
         sandbox.close()
