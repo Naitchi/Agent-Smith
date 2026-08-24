@@ -12,7 +12,6 @@ import io
 from schemas import ExecutionResult
 from schemas import SandboxConfig
 
-
 class Sandbox:
     def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
         self.config = config
