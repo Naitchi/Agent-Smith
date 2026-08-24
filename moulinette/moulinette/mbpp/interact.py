@@ -92,6 +92,12 @@ def run_code_in_docker(
     container = None
 
     try:
+        # Pull the image on first use if it isn't cached locally yet.
+        try:
+            client.images.get(image)
+        except docker.errors.ImageNotFound:
+            client.images.pull(image)
+
         # Create container (don't auto-remove so we can get logs on timeout)
         container = client.containers.create(
             image,

@@ -2,6 +2,14 @@
 
 Evaluation tools for Project 3: Agent Smith.
 
+## Prerequisites
+
+- Python 3.10+ and uv (https://docs.astral.sh/uv/).
+- A running Docker daemon (needed for `validate`/`validate_metrics`/`warmup`, and for
+  your own agent when it evaluates SWE-bench solutions).
+- Network access on first use: `dump swebench`/`select` download the SWE-bench
+  dataset from Hugging Face, and Docker images are pulled from Docker Hub on demand.
+
 ## Installation
 
 ```bash
@@ -9,7 +17,25 @@ cd moulinette
 uv sync
 ```
 
+## Setting up your project
+
+Copy `models_public.py` (next to this README) into your own project. It defines the
+exact Pydantic schema (`SolutionOutput`, `StepMetrics`, `SandboxConfig`,
+`MBPPTaskInput`, `SWEBenchTaskInput`) the moulinette expects `solution.json` to match.
+
 ---
+
+## Quickstart
+
+```bash
+./quickstart.sh mbpp --student-path ../student --model-name "model/name" --provider-url "https://provider.api/v1"
+./quickstart.sh swebench --student-path ../student --model-name "model/name" --provider-url "https://provider.api/v1"
+```
+
+Runs dump, run-agent, and validate for one task in a single command, with the
+right timeout and paths already wired up. Run `./quickstart.sh --help` for
+all options (`--task-id`, `--seed`, `--cache-dir`). Useful to sanity-check
+your agent quickly; see below for the commands it wraps.
 
 ## Core Usage
 
@@ -28,6 +54,17 @@ uv run moulinette_eval dump swebench --output task.json
 # Specific SWE-bench task
 uv run moulinette_eval dump swebench --task-id sympy__sympy-23534 --output task.json
 ```
+
+### Run your agent under a timeout
+
+```bash
+uv run moulinette_eval run-agent 120 "python -m agent_mbpp --task-file task.json --output solution.json"
+```
+
+Launches the given command in its own process group and kills it if it hasn't
+returned within the given number of seconds (the exam scripts use this so a hung
+agent fails that one task instead of blocking the whole run). Useful to test your
+own agent's behavior against the timeout before the real exam.
 
 ### Validate a solution
 
@@ -51,6 +88,13 @@ uv run moulinette_eval display solution.json
 uv run moulinette_eval display solution.json --full
 ```
 
+### All commands at a glance
+
+`moulinette_eval` is a Fire CLI (https://github.com/google/python-fire) --
+`--help` alone only prints the module docstring, not the command list. Run it
+with no arguments to see the full list: `dump`, `run-agent`, `validate`,
+`validate_metrics`, `select`, `display`, `warmup`.
+
 ### Evaluation flow
 
 ```
@@ -64,74 +108,9 @@ MOULINETTE                      STUDENT
     │── validate ──────────────────│
 ```
 
-The moulinette only dumps tasks and validates solutions. It does NOT run student code.
-
----
-
-## Corrector Guide
-
-### Select exam tasks
-
-```bash
-uv run moulinette_eval select swebench --count 3
-uv run moulinette_eval select swebench --count 3 --seed 42 --output selection.json
-```
-
-### Run exam scripts
-
-```bash
-# From src_project_3/
-./exams/exam_mbpp.sh --student-path ./student --moulinette-path ./moulinette --env-file .env
-./exams/exam_swebench.sh --student-path ./student --moulinette-path ./moulinette --env-file .env
-./exams/exam_sandbox.sh --student-path ./student --moulinette-path ./moulinette --env-file .env
-```
-
-Results are saved to `evaluations/(mbpp|swebench|sandbox)/$DATETIME/`.
-
----
-
-## Advanced Topics
-
-### Exploring tasks (Fire CLIs)
-
-Each submodule has a Fire CLI for direct access:
-
-```bash
-# MBPP
-uv run moulinette_mbpp list_tasks
-uv run moulinette_mbpp list_tasks --split test
-uv run moulinette_mbpp get_task 42
-uv run moulinette_mbpp evaluate_task_solution 42 "def similar_elements(a, b): return tuple(set(a) & set(b))"
-
-# SWE-bench
-uv run moulinette_swebench list_instances
-uv run moulinette_swebench list_instances --repo_pattern "sympy"
-uv run moulinette_swebench get_instance_info sympy__sympy-23534
-uv run moulinette_swebench eval sympy__sympy-23534 --patch patch.diff
-```
-
-### Accessing gold patches
-
-Gold patches are available in the SWE-bench dataset but hidden from students. Use the `swebench` Python library directly to access them.
-
-### Adjusting difficulty
-
-By default, the moulinette selects instances with difficulty `"<15 min fix"`. Modify `moulinette/swebench/interact.py` to change the default:
-
-```python
-def list_instances(
-    self,
-    difficulty: Union[str, List[str], Difficulty, List[Difficulty]] = Difficulty.LESS_THAN_15_MIN,
-    sort_by_patch_length: bool = False,
-    limit: Optional[int] = 7,
-) -> List[str]:
-```
-
-Available difficulties: `LESS_THAN_15_MIN`, `MIN_15_TO_1_HOUR`, `HOURS_1_TO_4`, `MORE_THAN_4_HOURS`.
-
-### Task selection rationale
-
-See `experiments/task_selection/` for benchmark scripts, shortlist generation, and verification tooling.
+`dump`/`validate`/`validate_metrics`/`display` never execute your agent's code --
+they only produce/read task and solution JSON. `run-agent` is the one command that
+does launch a process (your agent, under a timeout).
 
 ---
 
@@ -142,9 +121,9 @@ See `experiments/task_selection/` for benchmark scripts, shortlist generation, a
 | Metric | Limit |
 |--------|-------|
 | Max iterations | 10 |
-| Max input tokens | 4,000 |
-| Max output tokens | 1,000 |
-| Timeout | 60 seconds |
+| Max input tokens | 6,000 |
+| Max output tokens | 1,500 |
+| Timeout | 120 seconds |
 
 ### SWE-bench limits
 
@@ -155,24 +134,17 @@ See `experiments/task_selection/` for benchmark scripts, shortlist generation, a
 | Max output tokens | 10,000 |
 | Timeout | 900 seconds |
 
-### Changing limits
-
-Edit `moulinette/models.py`:
-
-```python
-@classmethod
-def mbpp_defaults(cls) -> "MetricsLimits":
-    return cls(
-        max_iterations=10,
-        max_input_tokens=4_000,
-        max_output_tokens=1_000,
-        max_time_seconds=60.0,
-    )
-```
-
 ### Pass criteria
 
 | Benchmark | Tasks | Pass Threshold |
 |-----------|-------|----------------|
 | MBPP | 5 random | 4 out of 5 |
 | SWE-bench | 3 random | 2 out of 3 |
+
+---
+
+## Troubleshooting
+
+- A traceback mentioning `ResourceTracker`/`multiprocess` appears after a
+  successful command: harmless, a known cleanup quirk in a dependency,
+  unrelated to whether your command succeeded. Check the actual output/exit code.

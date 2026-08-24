@@ -1,8 +1,14 @@
-# ABOUTME: Fire CLI for moulinette evaluation tools (dump, validate, select, display).
-# ABOUTME: The moulinette does NOT run student code — it only dumps tasks and validates solutions.
+# ABOUTME: Fire CLI for moulinette evaluation tools (dump, validate, select, display, run-agent, warmup).
+# ABOUTME: The moulinette does NOT run student code, except run-agent which enforces a hard timeout on it.
 import json
+import os
 import random
+import shlex
+import signal
+import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from colorama import Fore, Style, init as colorama_init
@@ -16,6 +22,20 @@ from moulinette.models import (
 )
 from moulinette.mbpp import InteractMBPP
 from moulinette.swebench import InteractSweBench, SEED_POOL, EXAM_POOL
+
+# Silences a harmless multiprocess.ResourceTracker AttributeError on Python 3.12 shutdown.
+try:
+    from multiprocess.resource_tracker import ResourceTracker as _ResourceTracker
+
+    def _safe_del(self, _original_del=_ResourceTracker.__del__):
+        try:
+            _original_del(self)
+        except AttributeError:
+            pass
+
+    _ResourceTracker.__del__ = _safe_del
+except ImportError:
+    pass
 
 # Initialize colorama
 colorama_init(autoreset=True)
@@ -46,6 +66,9 @@ def status_color(ok: bool, ok_text: str = "OK", fail_text: str = "EXCEEDED") -> 
 # Pool of predetermined SWE-bench tasks for exam evaluation.
 SWEBENCH_EXAM_POOL = EXAM_POOL
 
+# Cap on the SWE-bench grading run itself, separate from the agent's own timeout.
+SWEBENCH_EVAL_TIMEOUT_SECONDS = 900
+
 
 def _validate_swebench_patch(sb: InteractSweBench, instance_id: str, patch: str) -> bool:
     """Validate a SWE-bench patch by running the evaluation script.
@@ -63,6 +86,7 @@ def _validate_swebench_patch(sb: InteractSweBench, instance_id: str, patch: str)
             instance_id=instance_id,
             container_id=None,
             patch=patch,
+            timeout=SWEBENCH_EVAL_TIMEOUT_SECONDS,
         )
     except Exception as e:
         print(f"Error validating solution: {e}")
@@ -96,15 +120,86 @@ def _print_metrics(solution: SolutionOutput, limits: MetricsLimits, result: Metr
 class MoulinetteCLI:
     """Moulinette CLI for MBPP and SWE-bench task management.
 
-    The moulinette does NOT run student code. It only:
+    The moulinette does NOT run student code, except through run-agent, which runs it
+    under a hard timeout for exam scripts. Commands:
     1. Dumps tasks to JSON files (dump command)
     2. Validates solutions from JSON files (validate command)
     3. Validates solution metrics (validate_metrics command)
     4. Selects random tasks for exam evaluation (select command)
     5. Pretty-prints solution.json for inspection (display command)
+    6. Runs a student agent command under a hard timeout (run-agent command)
+    7. Pre-pulls exam-pool Docker images (warmup command)
 
     Full evaluation is performed by exam scripts (exam_mbpp.sh, exam_swebench.sh).
     """
+
+    def run_agent(self, time_limit: int, cmd: str):
+        """Run a student agent command under a hard OS-level timeout.
+
+        exam_mbpp.sh/exam_swebench.sh used to invoke the student agent directly and only
+        check its wall-clock duration *after* it returned — an agent that never returns
+        (infinite loop, unbounded LLM retries, network deadlock) would hang the exam
+        script forever instead of failing the task. This runs the agent in its own
+        process group and kills the whole group (agent + anything it forked) once
+        time_limit is exceeded, so the script always makes progress.
+
+        Args:
+            time_limit: Seconds to allow cmd to run before it is killed.
+            cmd: The agent invocation, as a single shell-quoted command line
+                (e.g. "python -m agent_mbpp --task-file task.json --output solution.json").
+        """
+        start = time.monotonic()
+        proc = subprocess.Popen(shlex.split(cmd), start_new_session=True)
+        try:
+            proc.wait(timeout=time_limit)
+        except subprocess.TimeoutExpired:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(pgid, signal.SIGKILL)
+                proc.wait()
+            print(red(f"Agent exceeded time limit ({time_limit}s) — killed"))
+            sys.exit(124)  # conventional timeout exit code, mirrors GNU `timeout`
+
+        elapsed = time.monotonic() - start
+        if proc.returncode != 0:
+            print(red(f"Agent exited with code {proc.returncode} after {elapsed:.1f}s"))
+            sys.exit(proc.returncode)
+        print(green(f"Agent finished in {elapsed:.1f}s"))
+
+    def warmup(self, benchmark: str = "swebench", max_workers: int = 4):
+        """Pre-pull exam-pool Docker images in parallel to avoid cold-pull delays during grading.
+
+        Args:
+            benchmark: Only "swebench" is supported (MBPP has no per-task images to pull).
+            max_workers: Number of concurrent `docker pull` operations.
+        """
+        if benchmark != "swebench":
+            print(red(f"Warmup is only supported for swebench (got: {benchmark})"))
+            sys.exit(1)
+
+        sb = InteractSweBench()
+        pool = SWEBENCH_EXAM_POOL
+        print(f"Pulling {len(pool)} SWE-bench image(s) ({max_workers} at a time)...")
+
+        failures = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(sb.pull, instance_id): instance_id for instance_id in pool}
+            for future in as_completed(futures):
+                instance_id = futures[future]
+                try:
+                    future.result()
+                    print(green(f"  {instance_id}: OK"))
+                except Exception as e:
+                    failures.append(instance_id)
+                    print(red(f"  {instance_id}: FAILED ({e})"))
+
+        if failures:
+            print(red(f"\n{len(failures)}/{len(pool)} image(s) failed to pull: {', '.join(failures)}"))
+            sys.exit(1)
+        print(green(f"\nAll {len(pool)} image(s) ready."))
 
     def dump(self, benchmark: str, task_id: str = None, seed: int = None, output: str = "task.json"):
         """Dump task to JSON. Random if no task_id given.
@@ -195,6 +290,11 @@ class MoulinetteCLI:
                 skip_first_k_tests=0,  # Run ALL tests including hidden
             )
             passed = eval_result.get("success", False)
+            if not passed:
+                # Surface infra failures (e.g. a missing Docker image) distinctly from a wrong solution.
+                detail = eval_result.get("output") or eval_result.get("message")
+                if detail:
+                    print(red(f"Correctness check detail: {detail}"))
         elif benchmark == "swebench":
             task = SWEBenchTaskInput.model_validate(task_data)
             sb = InteractSweBench()
