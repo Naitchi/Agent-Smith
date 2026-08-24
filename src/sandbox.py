@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import redirect_stdout, redirect_stderr
 from multiprocessing import Process, Queue
 from typing import Any, Dict
