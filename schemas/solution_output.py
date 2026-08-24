@@ -1,3 +1,8 @@
+from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel, Field
+from .step_metrics import StepMetrics
+
 
 class SolutionOutput(BaseModel):
     """Output from student solution, required format for evaluation.
@@ -6,7 +11,8 @@ class SolutionOutput(BaseModel):
     The moulinette validates this against task correctness and
     metrics limits.
     """
-    task_id: str = Field(..., description="Task identifier (MBPP
+
+    task_id: str = Field(..., description="Task identifier (MBPP \
     task_id as string, or SWE-bench instance_id)")
     benchmark: str = Field(..., description="Benchmark type: 'mbpp' \
     or 'swebench'")
@@ -24,12 +30,16 @@ class SolutionOutput(BaseModel):
     output_tokens across all steps")
     total_time_seconds: float = Field(..., description="Wall-clock \
     time from agent start to finish")
-    steps: List[StepMetrics] = Field(default_factory=list,
-    description="Per-step metrics, one entry per agent iteration")
+    steps: List[StepMetrics] = Field(
+        default_factory=list,
+        description="Per-step metrics, one entry per agent iteration",
+    )
     system_prompt: str = Field(default="", description="Full system \
     prompt sent to the LLM (for provenance checking)")
     error: Optional[str] = Field(default=None, description="Error \
     message if the agent failed (None if successful)")
-    timestamp: str = Field(default_factory=lambda: datetime.now().
-    isoformat(), description="ISO 8601 timestamp of when the \
-    solution was produced")
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO 8601 timestamp of when the \
+    solution was produced",
+    )
