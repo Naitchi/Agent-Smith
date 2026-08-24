@@ -3,7 +3,7 @@ install:
 	mv .env.example .env
 
 run:
-# 	uv sync
+	make install
 	uv run -m src
 
 clean:

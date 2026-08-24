@@ -1,8 +1,8 @@
 # Agent Smith — Checklist binôme
 
 > Répartition en **deux lots** :
-> - **Lot A — Côté Agent** (LLM, extraction, boucle, prompts, CLIs, benchmark)
-> - **Lot B — Côté Exécution** (Sandbox, client MCP, serveurs MCP, outils, Docker)
+> - **Lot mobenais — Côté Agent** (LLM, extraction, boucle, prompts, CLIs, benchmark)
+> - **Lot bclairot — Côté Exécution** (Sandbox, client MCP, serveurs MCP, outils, Docker)
 >
 > Les deux lots sont séparés par un **contrat d'interface** défini au jour 1,
 > ce qui permet de travailler en parallèle sans se bloquer.
@@ -16,7 +16,7 @@ Ne commencez pas à coder chacun de votre côté avant d'avoir fini cette partie
 ## 0.1 La frontière entre vos deux lots
 
 ```
-   ┌───────────────── LOT A ──────────────────┐   ┌────────── LOT B ──────────────┐
+   ┌───────────────── LOT mobenais ──────────────────┐   ┌────────── LOT bclairot ──────────────┐
    │                                          │   │                               │
    │  agent_mbpp / agent_swebench (CLI)       │   │   Sandbox                     │
    │             │                            │   │    ├─ sécurité (imports, FS,  │
@@ -32,8 +32,8 @@ Ne commencez pas à coder chacun de votre côté avant d'avoir fini cette partie
    └──────────────────────────────────────────┘   └───────────────────────────────┘
 ```
 
-**A ne touche jamais** à ce qui est dans le lot B, et inversement.
-La seule chose que A connaît de B : `Sandbox.execute()`, `Sandbox.get_manual()`, `Sandbox.close()`.
+**mobenais ne touche jamais** à ce qui est dans le lot bclairot, et inversement.
+La seule chose que mobenais connaît de bclairot : `Sandbox.execute()`, `Sandbox.get_manual()`, `Sandbox.close()`.
 
 ## 0.2 Les 5 malentendus à lever avant de coder (les deux doivent les avoir compris)
 
@@ -45,25 +45,25 @@ La seule chose que A connaît de B : `Sandbox.execute()`, `Sandbox.get_manual()`
 
 ## 0.3 Setup commun
 
-- [ ] Repo git, branches `feat/agent` (A) et `feat/sandbox` (B)
-- [ ] Python **3.10** exactement, `uv` comme gestionnaire de paquets
-- [ ] `pyproject.toml` avec les entry points :
-  - [ ] `sandbox = "agent_smith.sandbox.cli:main"` → `uv run sandbox`
+- [ ] Repo git, branches `feat/agent` (mobenais) et `feat/sandbox` (bclairot)
+- [x] Python **3.10** exactement, `uv` comme gestionnaire de paquets
+- [x] `pyproject.toml` avec les entry points :
+  - [x] `sandbox = "agent_smith.sandbox.cli:main"` → `uv run sandbox`
   - [ ] `agent_mbpp` et `agent_swebench` importables → `uv run python -m agent_mbpp`
-- [ ] `.env.example`, `.gitignore` (`.env`, `cache/`, `evaluations/`)
-- [ ] `sandbox_template.json` à la racine
-- [ ] `mcp_tools_mbpp.py` et `mcp_tools_swebench.py` à la racine (imposé par le sujet)
+- [x] `.env.example`, `.gitignore` (`.env`, `cache/`, `evaluations/`)
+- [x] `sandbox_template.json` à la racine
+- [x] `mcp_tools_mbpp.py` et `mcp_tools_swebench.py` à la racine (imposé par le sujet)
 
 ## 0.4 Modèles Pydantic — à écrire ensemble, personne ne les modifie seul ensuite
 
 Fichier `schemas/` — c'est le contrat avec la moulinette.
 
-- [ ] `SandboxConfig` (copier la définition exacte du sujet)
-- [ ] `MBPPTaskInput`, `SWEBenchTaskInput`
-- [ ] `StepMetrics` — tous les champs : `step`, `input_tokens`, `output_tokens`,
+- [x] `SandboxConfig` (copier la définition exacte du sujet)
+- [x] `MBPPTaskInput`, `SWEBenchTaskInput`
+- [x] `StepMetrics` — tous les champs : `step`, `input_tokens`, `output_tokens`,
       `request_time_ms`, `timestamp`, `api_url`, `model_name`, `llm_output`,
       `sandbox_input`, `sandbox_output`, `retries`
-- [ ] `SolutionOutput` — dont `system_prompt`, `steps`, `error`
+- [x] `SolutionOutput` — dont `system_prompt`, `steps`, `error`
 
 ## 0.5 Contrat d'interface — à écrire ensemble, jour 1
 
@@ -92,38 +92,38 @@ class SandboxProtocol(Protocol):
 - [ ] Décider ensemble **comment le serveur MCP MBPP reçoit la tâche** (il a besoin
       de `test_list` pour `run_tests`). Au choix :
       `python mcp_tools_mbpp.py --task-file ../cache/mbpp_task.json`
-      ou variable d'env `MBPP_TASK_FILE`. **À figer maintenant**, A lance le process.
+      ou variable d'env `MBPP_TASK_FILE`. **À figer maintenant**, mobenais lance le process.
 - [ ] Même décision pour SWE-bench : comment le serveur reçoit `docker_image`,
       `eval_script`, `TESTBED_PATH` (env vars ou args CLI).
-- [ ] Décider qui construit l'objet `Sandbox` : A dans son CLI, à partir des args
+- [ ] Décider qui construit l'objet `Sandbox` : mobenais dans son CLI, à partir des args
       `--mcp-stdio` / `--mcp-server`.
 
 ## 0.6 Les deux mocks de démarrage
 
 Pour ne pas s'attendre l'un l'autre :
 
-- [ ] **B fournit à A un `FakeSandbox`** (10 lignes) dès le jour 1 : `execute()` fait
-      un `exec()` naïf, `get_manual()` renvoie un texte en dur. A peut coder toute
+- [ ] **bclairot fournit à mobenais un `FakeSandbox`** (10 lignes) dès le jour 1 : `execute()` fait
+      un `exec()` naïf, `get_manual()` renvoie un texte en dur. mobenais peut coder toute
       sa boucle dessus.
-- [ ] **A fournit à B un `scripts/fake_agent.py`** : un script qui envoie 3 blocs de
-      code en dur à la sandbox et affiche les `ExecutionResult`. B teste sans LLM.
+- [ ] **mobenais fournit à bclairot un `scripts/fake_agent.py`** : un script qui envoie 3 blocs de
+      code en dur à la sandbox et affiche les `ExecutionResult`. bclairot teste sans LLM.
 
 ## 0.7 Répartition des fichiers (évite les conflits git)
 
 | Chemin | Propriétaire |
 |---|---|
 | `schemas/`, `contract.py` | **commun** (modif = accord des deux) |
-| `llm/`, `agent/`, `agent_mbpp/`, `agent_swebench/` | **A** |
-| `sandbox/`, `mcp/`, `mcp_tools_*.py`, `docker/` | **B** |
-| `sandbox_template.json` | **B** |
-| `BENCHMARK_REPORT.md` | **A** (ablation par B) |
+| `llm/`, `agent/`, `agent_mbpp/`, `agent_swebench/` | **mobenais** |
+| `sandbox/`, `mcp/`, `mcp_tools_*.py`, `docker/` | **bclairot** |
+| `sandbox_template.json` | **bclairot** |
+| `BENCHMARK_REPORT.md` | **mobenais** (ablation par bclairot) |
 | `README.md` | **commun** (chacun ses sections) |
 
 ---
 
-# LOT A — CÔTÉ AGENT
+# LOT mobenais — CÔTÉ AGENT
 
-## A.1 Couche LLM
+## mobenais.1 Couche LLM
 
 - [ ] `class LLMResponse` : `text`, `input_tokens`, `output_tokens`, `latency_ms`, `retries`, `api_url`, `model_name`
 - [ ] `class LLMProvider(ABC)` : `complete(messages, stop, max_tokens) -> LLMResponse`
@@ -138,7 +138,7 @@ Pour ne pas s'attendre l'un l'autre :
 - [ ] Usage tracking : tokens, retries, latence, nombre de requêtes
 - [ ] Free tiers uniquement, **aucune clé en dur** (grade 0 sinon)
 
-## A.2 Extraction de code
+## mobenais.2 Extraction de code
 
 - [ ] `extract_code(llm_text: str) -> ExtractedCode | None`
 - [ ] Format 1 — bloc Python (primaire) : ` ```python ... ``` ` + `<end_code>`
@@ -147,10 +147,10 @@ Pour ne pas s'attendre l'un l'autre :
 - [ ] Format 4 — ReAct : `Action: tool_name` / `Action Input: {...}`
 - [ ] `to_python_call(name, args) -> str` → `result = read_file(filepath="/testbed/file.py")`
 - [ ] Tolérance : bloc non fermé, ` ``` ` sans langage, texte parasite
-- [ ] Si interprétation « de secours » → le signaler pour que B/le LLM le sache
+- [ ] Si interprétation « de secours » → le signaler pour que bclairot/le LLM le sache
 - [ ] `None` propre si rien d'exploitable → observation d'erreur explicite au LLM
 
-## A.3 Boucle agent
+## mobenais.3 Boucle agent
 
 - [ ] `class AgentLoop`
   - [ ] `__init__(llm, sandbox: SandboxProtocol, system_prompt, max_iterations)`
@@ -163,7 +163,7 @@ Pour ne pas s'attendre l'un l'autre :
 - [ ] Aucun crash possible → `SolutionOutput(success=False, error=...)` écrit quand même
 - [ ] Troncature / résumé des vieilles observations pour tenir le budget
 
-## A.4 System prompts (fortement noté)
+## mobenais.4 System prompts (fortement noté)
 
 - [ ] Doc des outils **injectée depuis `sandbox.get_manual()`** — jamais recopiée à la main
 - [ ] Slots explicites : `Thought:` / `Code:` / `Observation:`
@@ -176,7 +176,7 @@ Pour ne pas s'attendre l'un l'autre :
 > grossit à chaque tour, donc un prompt système de 1 500 tokens rend la tâche
 > mathématiquement impossible. **Mesure ton prompt en tokens dès le début.**
 
-## A.5 CLI agent MBPP
+## mobenais.5 CLI agent MBPP
 
 - [ ] `uv run python -m agent_mbpp --task-file ... --output ... --model-name ... --provider-url ...`
 - [ ] Clé API lue depuis l'environnement
@@ -185,10 +185,10 @@ Pour ne pas s'attendre l'un l'autre :
 - [ ] Limites : **10 itérations / 6k in / 1.5k out / 120 s**
 - [ ] Objectif : **4/5**
 
-## A.6 CLI agent SWE-bench
+## mobenais.6 CLI agent SWE-bench
 
 - [ ] `uv run python -m agent_swebench --task-file ... --output ... --model-name ... --provider-url ...`
-- [ ] Chargement `SWEBenchTaskInput`, passage des infos au serveur MCP de B
+- [ ] Chargement `SWEBenchTaskInput`, passage des infos au serveur MCP de bclairot
 - [ ] `SolutionOutput` : `benchmark="swebench"`, `solution` = patch renvoyé par `get_patch()`
 - [ ] Limites : **30 itérations / 300k in / 10k out / 900 s**
 - [ ] Objectif : **2/3**
@@ -196,9 +196,9 @@ Pour ne pas s'attendre l'un l'autre :
 
 ---
 
-# LOT B — CÔTÉ EXÉCUTION
+# LOT bclairot — CÔTÉ EXÉCUTION
 
-## B.1 Sandbox — classe principale
+## bclairot.1 Sandbox — classe principale
 
 - [ ] `class Sandbox`
   - [ ] `__init__(config: SandboxConfig, mcp_client: MCPClient | None = None)`
@@ -211,7 +211,7 @@ Pour ne pas s'attendre l'un l'autre :
   - [ ] Toujours présent, indépendamment du serveur MCP connecté
   - [ ] MBPP : `final_answer(code)` — SWE-bench : `final_answer(get_patch())`
 
-## B.2 Sécurité — chaque point est testé par `exam_sandbox.sh` (tout-ou-rien)
+## bclairot.2 Sécurité — chaque point est testé par `exam_sandbox.sh` (tout-ou-rien)
 
 - [ ] **Imports** : allowlist stricte
   - [ ] `guarded_import(name, globals, locals, fromlist, level)` remplaçant `__import__`
@@ -237,18 +237,18 @@ Pour ne pas s'attendre l'un l'autre :
   ```
 - [ ] **Sécurité en stdlib pure** — `RestrictedPython` et équivalents interdits
 
-## B.3 Choix d'isolation (à défendre en soutenance)
+## bclairot.3 Choix d'isolation (à défendre en soutenance)
 
 - [ ] Trancher : `exec()` in-process vs `subprocess` / `multiprocessing`
   - in-process : simple, mais timeout dur et RLIMIT difficiles à appliquer proprement
   - process séparé : vraie frontière, timeout par `kill`, mais il faut sérialiser l'état
 - [ ] Documenter le trade-off dans le README
 
-## B.4 Feedback explicite au LLM — 5 cas obligatoires
+## bclairot.4 Feedback explicite au LLM — 5 cas obligatoires
 
 Le champ `error` de `ExecutionResult` doit couvrir :
 
-- [ ] Aucun bloc de code valide trouvé *(cas remonté par A, format d'erreur à convenir)*
+- [ ] Aucun bloc de code valide trouvé *(cas remonté par mobenais, format d'erreur à convenir)*
 - [ ] Bloc mal formé mais interprété quand même → **expliquer comment**
 - [ ] Timeout atteint → indiquer que la sortie est partielle
 - [ ] Sortie d'outil tronquée → le dire explicitement
@@ -256,7 +256,7 @@ Le champ `error` de `ExecutionResult` doit couvrir :
 
 > *« The LLM should never be left guessing about what happened. »*
 
-## B.5 CLI sandbox (REPL)
+## bclairot.5 CLI sandbox (REPL)
 
 - [ ] `uv run sandbox` → REPL interactif
 - [ ] `uv run sandbox sandbox_template.json`
@@ -268,7 +268,7 @@ Le champ `error` de `ExecutionResult` doit couvrir :
   - [ ] Affiche résultat ou erreur levée
   - [ ] Sortie propre sur `exit` **et** sur EOF (Ctrl+D)
 
-## B.6 Génération du manuel
+## bclairot.6 Génération du manuel
 
 - [ ] `build_manual(tools: list[ToolSchema], config: SandboxConfig) -> str`
   - [ ] Nom, description, types de paramètres de chaque outil MCP
@@ -276,7 +276,7 @@ Le champ `error` de `ExecutionResult` doit couvrir :
   - [ ] Rappel des imports autorisés et des répertoires accessibles
 - [ ] **Test** : connecter un autre serveur MCP → le manuel change tout seul
 
-## B.7 Client MCP
+## bclairot.7 Client MCP
 
 - [ ] `class MCPClient`
   - [ ] `connect_stdio(command: str)` — lance le serveur en sous-process
@@ -290,13 +290,13 @@ Le champ `error` de `ExecutionResult` doit couvrir :
   - [ ] Injectée dans le namespace sandbox
   - [ ] **Aucun nom d'outil hardcodé**
 
-## B.8 `mcp_tools_mbpp.py`
+## bclairot.8 `mcp_tools_mbpp.py`
 
 - [ ] `run_tests(code: str) -> str` — exécute les tests de la tâche contre le code
 - [ ] Réception de la tâche selon la convention figée en §0.5
 - [ ] Outils additionnels libres (ex. `lint(code)`)
 
-## B.9 `mcp_tools_swebench.py` — les 9 outils obligatoires
+## bclairot.9 `mcp_tools_swebench.py` — les 9 outils obligatoires
 
 Testés **indépendamment de l'agent** : ils doivent marcher seuls.
 
@@ -318,7 +318,7 @@ Testés **indépendamment de l'agent** : ils doivent marcher seuls.
 
 - [ ] Troncature des sorties volumineuses + message indiquant la troncature
 
-## B.10 Docker (SWE-bench)
+## bclairot.10 Docker (SWE-bench)
 
 - [ ] `class DockerManager`
   - [ ] `pull(image)` / `start(image, testbed_path)`
@@ -335,19 +335,19 @@ Testés **indépendamment de l'agent** : ils doivent marcher seuls.
 
 ## C.1 BENCHMARK_REPORT.md
 
-Pilote : **A** (c'est lui qui a la couche multi-modèles). Ablation : **B**.
+Pilote : **mobenais** (c'est lui qui a la couche multi-modèles). Ablation : **bclairot**.
 
 - [ ] **≥ 5 modèles** × **≥ 3 tâches SWE-bench** identiques
 - [ ] Setup : modèles, providers, tâches choisies **et pourquoi**
 - [ ] Table de résultats par couple modèle × tâche : Pass/Fail · itérations · tokens in · tokens out · wall-clock
-- [ ] Fiabilité provider : temps de réponse moyen, retries, disponibilité — *(données de A)*
+- [ ] Fiabilité provider : temps de réponse moyen, retries, disponibilité — *(données de mobenais)*
 - [ ] **≥ 2 métriques intermédiaires** parmi :
-  - [ ] Étape du premier accès au fichier qui figure dans le patch final *(métrique côté outils → B)*
-  - [ ] Étape où les échecs de tests diminuent pour la première fois *(B)*
-  - [ ] Itérations entre « tests passent » et `final_answer` — idéal : 0 *(A)*
+  - [ ] Étape du premier accès au fichier qui figure dans le patch final *(métrique côté outils → bclairot)*
+  - [ ] Étape où les échecs de tests diminuent pour la première fois *(bclairot)*
+  - [ ] Itérations entre « tests passent » et `final_answer` — idéal : 0 *(mobenais)*
 - [ ] **Ablation** : un avant/après sur un changement, même modèle, mêmes tâches
-  - suggestion A : prompt vague vs prompt explicite
-  - suggestion B : avec vs sans `find_references`, ou troncature des sorties d'outils
+  - suggestion mobenais : prompt vague vs prompt explicite
+  - suggestion bclairot : avec vs sans `find_references`, ou troncature des sorties d'outils
 - [ ] Conclusions appuyées sur les données : modèles retenus / écartés
 - [ ] Les `solution.json` correspondants **committés dans le repo**
 
@@ -358,10 +358,10 @@ Pilote : **A** (c'est lui qui a la couche multi-modèles). Ablation : **B**.
 - [ ] **Instructions** (install, config, exécution) — commun
 - [ ] **Resources** + description de l'usage de l'IA (quelles tâches, quelles parties) — commun
 - [ ] Architecture système — commun
-- [ ] Explication de la boucle agent — **A**
-- [ ] Design de la sandbox (dont le choix d'isolation) — **B**
-- [ ] Détails d'implémentation des outils — **B**
-- [ ] Résultats de benchmark et analyse — **A**
+- [ ] Explication de la boucle agent — **mobenais**
+- [ ] Design de la sandbox (dont le choix d'isolation) — **bclairot**
+- [ ] Détails d'implémentation des outils — **bclairot**
+- [ ] Résultats de benchmark et analyse — **mobenais**
 - [ ] **Rédigé en anglais**
 
 ## C.3 Sécurité IA & interdits (grade 0)
@@ -380,9 +380,9 @@ En soutenance, on demande **2 à 3 modifications live de 2-5 min**, et la questi
 peut tomber sur le lot de l'autre. Si l'un des deux ne sait pas où modifier,
 c'est éliminatoire.
 
-- [ ] **A explique le lot B à voix haute**, sans notes : sécurité sandbox, choix
+- [ ] **mobenais explique le lot bclairot à voix haute**, sans notes : sécurité sandbox, choix
       d'isolation, comment les outils MCP deviennent des fonctions Python
-- [ ] **B explique le lot A à voix haute** : boucle Thought→Code→Observation,
+- [ ] **bclairot explique le lot mobenais à voix haute** : boucle Thought→Code→Observation,
       les 4 formats d'extraction, rotation des clés, calcul du budget tokens
 - [ ] Chacun a déjà fait **au moins un commit** dans le lot de l'autre
 - [ ] Répétition : chacun fait une modif live dans le lot de l'autre, chronométrée
@@ -394,7 +394,7 @@ c'est éliminatoire.
 
 # PARTIE D — PLANNING ET POINTS D'INTÉGRATION
 
-| Jalon | A livre | B livre | Test d'intégration |
+| Jalon | mobenais livre | bclairot livre | Test d'intégration |
 |---|---|---|---|
 | **J1** | `fake_agent.py` | `FakeSandbox` | Les schémas Pydantic + `contract.py` sont figés |
 | **J2** | LLM + extraction basique (blocs ```python) | Sandbox nue + les 6 restrictions | `uv run sandbox` marche ; `exam_sandbox.sh` passe |
@@ -408,7 +408,7 @@ c'est éliminatoire.
 ## Règles d'or du binôme sur ce projet
 
 - [ ] **`exam_sandbox.sh` est prioritaire absolu.** C'est le seul exam en tout-ou-rien
-      et il ne dépend d'aucun LLM. B doit le faire passer avant tout le reste.
+      et il ne dépend d'aucun LLM. bclairot doit le faire passer avant tout le reste.
 - [ ] **Intégration #1 le plus tôt possible.** Le sujet le dit : si l'agent ne résout
       pas la tâche la plus simple **sans limites**, ajouter les limites n'aidera pas.
 - [ ] **Aucune modification unilatérale de `contract.py` ou `schemas/`.**
