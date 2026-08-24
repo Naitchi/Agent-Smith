@@ -13,7 +13,7 @@ from schemas import ExecutionResult
 from schemas import SandboxConfig
 
 
-class Sandbox(SandboxConfig):
+class Sandbox:
     def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
         self.config = config
         self._state: Dict[str, Any] = {}
@@ -92,7 +92,7 @@ class Sandbox(SandboxConfig):
                     error="Execution timed out.",
                     timed_out=True,
                     truncated=truncated,
-                    duration_ms=(time.time() - start) * 1000,
+                    duration_ms=self.config.max_execution_time_seconds * 1000,
                 )
             )
         except MemoryError:
