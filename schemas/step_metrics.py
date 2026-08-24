@@ -1,3 +1,8 @@
+from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel, Field
+
+
 class StepMetrics(BaseModel):
     """Metrics for a single agent step.
     Each step corresponds to one LLM generate -> sandbox execute
@@ -7,6 +12,7 @@ class StepMetrics(BaseModel):
     for steps where a field doesn't apply (e.g., no sandbox execution
     ).
     """
+
     step: int = Field(..., description="1-indexed iteration number")
     input_tokens: int = Field(..., description="Tokens sent to the \
     LLM for this step")
@@ -14,9 +20,10 @@ class StepMetrics(BaseModel):
     the LLM for this step")
     request_time_ms: float = Field(..., description="Wall-clock time \
     for the LLM API call in milliseconds")
-    timestamp: str = Field(default_factory=lambda: datetime.now().
-    isoformat(), description="ISO 8601 timestamp of when this step \
-    was recorded")
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO 8601 timestamp of when this step was recorded",
+    )
     api_url: str = Field(default="", description="Base URL of the LLM \
     API endpoint (e.g., 'https://openrouter.ai/api/v1')")
     model_name: str = Field(default="", description="Model identifier \
@@ -28,7 +35,7 @@ class StepMetrics(BaseModel):
     sandbox_output: str = Field(default="", description="Sandbox \
     execution result (stdout/stderr/error message)")
     retries: int = Field(default=0, description="Number of LLM API \
-    retries before getting a successful response (0 = first
+    retries before getting a successful response (0 = first \
     attempt succeeded)")
 
 
@@ -39,7 +46,8 @@ class SolutionOutput(BaseModel):
     The moulinette validates this against task correctness and
     metrics limits.
     """
-    task_id: str = Field(..., description="Task identifier (MBPP
+
+    task_id: str = Field(..., description="Task identifier (MBPP \
     task_id as string, or SWE-bench instance_id)")
     benchmark: str = Field(..., description="Benchmark type: 'mbpp' \
     or 'swebench'")
@@ -57,12 +65,16 @@ class SolutionOutput(BaseModel):
     output_tokens across all steps")
     total_time_seconds: float = Field(..., description="Wall-clock \
     time from agent start to finish")
-    steps: List[StepMetrics] = Field(default_factory=list,
-    description="Per-step metrics, one entry per agent iteration")
+    steps: List[StepMetrics] = Field(
+        default_factory=list,
+        description="Per-step metrics, one entry per agent iteration",
+    )
     system_prompt: str = Field(default="", description="Full system \
     prompt sent to the LLM (for provenance checking)")
     error: Optional[str] = Field(default=None, description="Error \
     message if the agent failed (None if successful)")
-    timestamp: str = Field(default_factory=lambda: datetime.now().
-    isoformat(), description="ISO 8601 timestamp of when the \
-    solution was produced")
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO 8601 timestamp of when the \
+    solution was produced",
+    )

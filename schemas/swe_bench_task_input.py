@@ -1,8 +1,12 @@
+from pydantic import BaseModel, Field
+
+
 class SWEBenchTaskInput(BaseModel):
     """Input for a SWE-bench task, provided by the moulinette.
     Your agent receives this and must produce a git patch that fixes
     the issue.
     """
+
     instance_id: str = Field(..., description="SWE-bench instance \
     identifier (e.g., 'sympy__sympy-23534')")
     problem_statement: str = Field(..., description="The GitHub issue \
@@ -14,5 +18,5 @@ class SWEBenchTaskInput(BaseModel):
     inside the container to evaluate the patch")
     hints_text: str = Field(default="", description="Optional hints \
     about the issue (may be empty)")
-    repo: str = Field(default="", description="Repository name (e.g.,
+    repo: str = Field(default="", description="Repository name (e.g., \
     'sympy/sympy')")
