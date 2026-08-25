@@ -5,6 +5,7 @@ from multiprocessing import Process, Queue
 from typing import Any, Dict
 from types import FrameType
 from queue import Empty
+import builtins
 import resource
 import signal
 import socket
@@ -23,38 +24,79 @@ class Sandbox:
 
     def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
         self.config = config
-        self._state: Dict[str, Any] = {"final_answer": self._final_answer}
+        self._state: Dict[str, Any] = self._make_initial_state()
 
-    # TODO refactor: to lower Cognitive complexity
-    # and delete the malicious code
-    def _is_code_safe(self, code: str) -> bool:
+    def _make_initial_state(self) -> Dict[str, Any]:
+        allowed_builtins = {
+            name: getattr(builtins, name)
+            for name in self.config.authorized_builtins
+            if hasattr(builtins, name)
+        }
+        return {
+            "__builtins__": allowed_builtins,
+            "final_answer": self._final_answer,
+        }
+
+    def _check_disallowed_imports(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.Import):
+            if len(node.names) > 1:
+                modified_node = [
+                    alias
+                    for alias in node.names
+                    if alias.name not in self.config.authorized_imports
+                ]
+                if len(modified_node) > 0:
+                    return True
+            elif (
+                len(node.names) == 1
+                and node.names[0].name not in self.config.authorized_imports
+            ):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module not in self.config.authorized_imports:
+                return True
+        return False
+
+    def _check_disallowed_attributes(self, node: ast.AST) -> bool:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr.startswith("__")
+            and node.func.attr not in self.config.authorized_attributes
+        ):
+            return True
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr.startswith("__")
+            and node.attr not in self.config.authorized_attributes
+        ):
+            return True
+        return False
+
+    # TODO Implement this function to check if the code is trying to access disallowed file paths
+    def _check_path_access(self, code: str) -> str: ...
+
+    def _is_code_not_safe(self, code: str) -> bool:
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            return False
+            return True
 
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.ImportFrom)
-                and node.module not in self.config.authorized_imports
+            if isinstance(node, ast.Import) or isinstance(
+                node, ast.ImportFrom
             ):
-                return False
-            elif isinstance(node, ast.Call) and (
-                (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id not in self.config.authorized_builtins
-                )
-                or (
-                    isinstance(node.func, ast.Attribute)
-                    and node.func.attr not in self.config.authorized_attributes
-                )
-            ):
-                return False
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name not in self.config.authorized_imports:
-                        return False
-        return True
+                node = self._check_disallowed_imports(node)
+                if node:
+                    return True
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+            ) or isinstance(node, ast.Attribute):
+                node = self._check_disallowed_attributes(node)
+                if node:
+                    return True
+        return False
 
     @staticmethod
     def _timeout_handler(signum: int, frame: FrameType | None) -> None:
@@ -167,7 +209,7 @@ class Sandbox:
         p = Process(target=self._worker, args=(code, self._state, q))
         result: ExecutionResult
 
-        if not self._is_code_safe(code):
+        if self._is_code_not_safe(code):
             return ExecutionResult(
                 error="Code contains disallowed operations."
             )
@@ -210,4 +252,4 @@ class Sandbox:
         )
 
     def close(self) -> None:
-        self._state = {"final_answer": self._final_answer}
+        self._state = self._make_initial_state()
