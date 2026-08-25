@@ -3,11 +3,11 @@ install:
 	mv .env.example .env
 
 run:
-	make install
 	uv run -m src
 
 clean:
-	rm -rf __pycache__ src/__pycache__ .venv
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	rm -rf .venv
 	rm .env
-	echo "default=oui" > .env.example
-	echo "default2=non" >> .env.example
+	echo "GROQ_API_KEY=" > .env.example
+	echo "OPENROUTER_API_KEY=" >> .env.example

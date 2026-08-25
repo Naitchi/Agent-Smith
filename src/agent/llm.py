@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-
+OPENROOTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 @dataclass
 class LLMResult:
@@ -31,6 +31,36 @@ def groq_complete(model: str, system: str, messages: list[dict]) -> LLMResult:
         json={
             "model": model,
             "max_tokens": 2048,
+            "tool_choice": "none",
+            "messages": [{"role": "system", "content": system}] + messages,
+        },
+        timeout=60.0,
+    )
+    response.raise_for_status()
+    latency_ms = (time.monotonic() - start) * 1000
+    body = response.json()
+    usage = body.get("usage", {})
+    return LLMResult(
+        text=body["choices"][0]["message"]["content"],
+        input_tokens=usage.get("prompt_tokens", 0),
+        output_tokens=usage.get("completion_tokens", 0),
+        latency_ms=latency_ms,
+    )
+
+
+
+def open_router_complete(model: str, system: str, messages: list[dict]) -> LLMResult:
+    start = time.monotonic()
+    response = httpx.post(
+        OPENROOTER_API_URL,
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+            "content-type": "application/json",
+        },
+        json={
+            "model": model,
+            "max_tokens": 2048,
+            "tool-choice": None,
             "messages": [{"role": "system", "content": system}] + messages,
         },
         timeout=60.0,

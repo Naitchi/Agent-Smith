@@ -1,9 +1,9 @@
 """Boucle ReAct : générer du code, l'exécuter, observer, recommencer."""
-from .llm import groq_complete
+from .llm import open_router_complete as groq_complete
 from .parsing import extract_code
 from schemas import SandboxConfig
-from scripts.fake_sandbox import FakeSandbox as Sandbox
-
+from ..sandbox import Sandbox
+import httpx
 
 SYSTEM = """Tu résous des tâches de programmation en écrivant du Python.
 À chaque étape, écris un unique bloc de code Python dans une fence ```py.
