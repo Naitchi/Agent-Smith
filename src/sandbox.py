@@ -17,11 +17,16 @@ from schemas import SandboxConfig
 
 
 class Sandbox:
+    class _FinalAnswer(Exception):
+        def __init__(self, value: Any) -> None:
+            self.value = value
+
     def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
         self.config = config
-        self._state: Dict[str, Any] = {}
+        self._state: Dict[str, Any] = {"final_answer": self._final_answer}
 
     # TODO refactor: to lower Cognitive complexity
+    # and delete the malicious code
     def _is_code_safe(self, code: str) -> bool:
         try:
             tree = ast.parse(code)
@@ -70,6 +75,9 @@ class Sandbox:
     def _blocked_call(*args: Any, **kwargs: Any) -> None:
         raise PermissionError("Network access is disabled in the sandbox.")
 
+    def _final_answer(self, answer: Any) -> None:
+        raise self._FinalAnswer(answer)
+
     def _worker(
         self, code: str, state: Dict[str, Any], queue: Queue[ExecutionResult]
     ) -> None:
@@ -84,6 +92,23 @@ class Sandbox:
         try:
             with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
                 exec(code, state)
+        except self._FinalAnswer as fa:
+            stdout, stderr, truncated = self._get_stdout_stderr(
+                stdout_buf, stderr_buf
+            )
+            try:
+                answer = str(fa.value)
+            except Exception:
+                answer = "final_answer value could not be converted to string"
+            queue.put(
+                ExecutionResult(
+                    stdout=stdout,
+                    stderr=stderr,
+                    final_answer=answer,
+                    truncated=truncated,
+                    duration_ms=(time.time() - start) * 1000,
+                )
+            )
         except TimeoutError:
             stdout, stderr, truncated = self._get_stdout_stderr(
                 stdout_buf, stderr_buf
@@ -140,6 +165,7 @@ class Sandbox:
     def execute(self, code: str) -> ExecutionResult:
         q: Queue[ExecutionResult] = Queue()
         p = Process(target=self._worker, args=(code, self._state, q))
+        result: ExecutionResult
 
         if not self._is_code_safe(code):
             return ExecutionResult(
@@ -153,11 +179,35 @@ class Sandbox:
             p.join(timeout=1)
             p.kill()
             try:
-                q.get(timeout=1)
+                result = q.get(timeout=1)
             except Empty:
-                return ExecutionResult(
+                result = ExecutionResult(
                     error="Execution timed out.",
                     timed_out=True,
                     duration_ms=self.config.max_execution_time_seconds * 1000,
                 )
-        return q.get()
+        else:
+            result = q.get()
+        return result
+
+    def get_manual(self) -> str:
+        return (
+            f"Manual for the sandbox environment."
+            f"{self.config.max_execution_time_seconds} seconds max"
+            f"execution time, {self.config.max_memory_mb} MB max memory."
+            f"Authorized imports: {self.config.authorized_imports}."
+            f"Authorized builtins: {self.config.authorized_builtins}."
+            f"Authorized attributes: {self.config.authorized_attributes}."
+            f"Authorized file path: {self.config.allowed_directories}."
+            f"{self.config.max_output_length} characters max output."
+            "No network access is allowed."
+            "Variables persist across execute() calls within the same session "
+            "(like a REPL/notebook cell). Do not assume a clean state after a"
+            "failed execution. To clear the state, call the close() method."
+            "You can use the final_answer(value) function to return a final"
+            " answer from your code. But it must be a string or convertible "
+            "to a string."
+        )
+
+    def close(self) -> None:
+        self._state = {"final_answer": self._final_answer}
