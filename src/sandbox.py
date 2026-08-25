@@ -4,6 +4,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from multiprocessing import Process, Queue
 from typing import Any, Dict
 from types import FrameType
+from queue import Empty
 import resource
 import signal
 import socket
@@ -13,6 +14,7 @@ import io
 
 from schemas import ExecutionResult
 from schemas import SandboxConfig
+
 
 class Sandbox:
     def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
@@ -150,11 +152,12 @@ class Sandbox:
             p.terminate()
             p.join(timeout=1)
             p.kill()
-            if not q.empty():
-                return q.get()
-            return ExecutionResult(
-                error="Execution timed out.",
-                timed_out=True,
-                duration_ms=self.config.max_execution_time_seconds * 1000,
-            )
+            try:
+                q.get(timeout=1)
+            except Empty:
+                return ExecutionResult(
+                    error="Execution timed out.",
+                    timed_out=True,
+                    duration_ms=self.config.max_execution_time_seconds * 1000,
+                )
         return q.get()
