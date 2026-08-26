@@ -2,52 +2,148 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout, redirect_stderr
 from multiprocessing import Process, Queue
-from typing import Any, Dict
+from typing import Any, Callable, Dict, IO
 from types import FrameType
+from queue import Empty
+import builtins
 import resource
 import signal
 import socket
 import time
+import types
 import ast
 import io
+import os
 
 from schemas import ExecutionResult
 from schemas import SandboxConfig
 
+
 class Sandbox:
+    class _FinalAnswer(Exception):
+        def __init__(self, value: Any) -> None:
+            self.value = value
+
     def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
         self.config = config
-        self._state: Dict[str, Any] = {}
+        self._state: Dict[str, Any] = self._make_initial_state()
 
-    # TODO refactor: to lower Cognitive complexity
-    def _is_code_safe(self, code: str) -> bool:
+    def _restricted_import(
+        self,
+        name: str,
+        globals: Dict[str, object] | None = None,
+        locals: Dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> types.ModuleType:
+        if name not in self.config.authorized_imports:
+            raise ImportError(f"Import of module '{name}' is not allowed.")
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    def _restricted_open(
+        self,
+        file: str,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+        closefd: bool = True,
+        opener: Callable[[str, int], int] | None = None,
+    ) -> IO[str] | IO[bytes]:
+        real_path = os.path.realpath(file)
+        for allowed_dir in self.config.allowed_directories:
+            if real_path == allowed_dir or real_path.startswith(
+                f"{allowed_dir}/"
+            ):
+                return builtins.open(
+                    file,
+                    mode,
+                    buffering,
+                    encoding,
+                    errors,
+                    newline,
+                    closefd,
+                    opener,
+                )
+        raise PermissionError(f"Access to file '{file}' is not allowed.")
+
+    def _make_initial_state(self) -> Dict[str, Any]:
+        allowed_builtins = {
+            name: getattr(builtins, name)
+            for name in self.config.authorized_builtins
+            if hasattr(builtins, name)
+        }
+        if "__import__" in self.config.authorized_builtins:
+            allowed_builtins["__import__"] = self._restricted_import
+        if "open" in self.config.authorized_builtins:
+            allowed_builtins["open"] = self._restricted_open
+        return {
+            "__builtins__": allowed_builtins,
+            "final_answer": self._final_answer,
+        }
+
+    def _check_disallowed_imports(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.Import):
+            if len(node.names) > 1:
+                modified_node = [
+                    alias
+                    for alias in node.names
+                    if alias.name not in self.config.authorized_imports
+                ]
+                if len(modified_node) > 0:
+                    return True
+            elif (
+                len(node.names) == 1
+                and node.names[0].name not in self.config.authorized_imports
+            ):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module not in self.config.authorized_imports:
+                return True
+        return False
+
+    def _check_disallowed_attributes(self, node: ast.AST) -> bool:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr.startswith("__")
+            and node.func.attr not in self.config.authorized_attributes
+        ):
+            return True
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr.startswith("__")
+            and node.attr not in self.config.authorized_attributes
+        ):
+            return True
+        return False
+
+    # TODO Implement this function to check if the code is trying
+    # to access disallowed file paths
+    def _check_path_access(self, code: str) -> str: ...
+
+    def _is_code_not_safe(self, code: str) -> bool:
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            return False
+            return True
 
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.ImportFrom)
-                and node.module not in self.config.authorized_imports
+            if isinstance(node, ast.Import) or isinstance(
+                node, ast.ImportFrom
             ):
-                return False
-            elif isinstance(node, ast.Call) and (
-                (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id not in self.config.authorized_builtins
-                )
-                or (
-                    isinstance(node.func, ast.Attribute)
-                    and node.func.attr not in self.config.authorized_attributes
-                )
-            ):
-                return False
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name not in self.config.authorized_imports:
-                        return False
-        return True
+                node = self._check_disallowed_imports(node)
+                if node:
+                    return True
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+            ) or isinstance(node, ast.Attribute):
+                node = self._check_disallowed_attributes(node)
+                if node:
+                    return True
+        return False
 
     @staticmethod
     def _timeout_handler(signum: int, frame: FrameType | None) -> None:
@@ -68,6 +164,9 @@ class Sandbox:
     def _blocked_call(*args: Any, **kwargs: Any) -> None:
         raise PermissionError("Network access is disabled in the sandbox.")
 
+    def _final_answer(self, answer: Any) -> None:
+        raise self._FinalAnswer(answer)
+
     def _worker(
         self, code: str, state: Dict[str, Any], queue: Queue[ExecutionResult]
     ) -> None:
@@ -75,6 +174,14 @@ class Sandbox:
         signal.signal(signal.SIGTERM, self._timeout_handler)
         limit_bytes = self.config.max_memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+        resource.setrlimit(
+            resource.RLIMIT_NPROC,
+            (self.config.max_processes, self.config.max_processes),
+        )
+        resource.setrlimit(
+            resource.RLIMIT_NOFILE,
+            (self.config.max_open_files, self.config.max_open_files),
+        )
         stderr_buf = io.StringIO()
         stdout_buf = io.StringIO()
 
@@ -82,6 +189,23 @@ class Sandbox:
         try:
             with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
                 exec(code, state)
+        except self._FinalAnswer as fa:
+            stdout, stderr, truncated = self._get_stdout_stderr(
+                stdout_buf, stderr_buf
+            )
+            try:
+                answer = str(fa.value)
+            except Exception:
+                answer = "final_answer value could not be converted to string"
+            queue.put(
+                ExecutionResult(
+                    stdout=stdout,
+                    stderr=stderr,
+                    final_answer=answer,
+                    truncated=truncated,
+                    duration_ms=(time.time() - start) * 1000,
+                )
+            )
         except TimeoutError:
             stdout, stderr, truncated = self._get_stdout_stderr(
                 stdout_buf, stderr_buf
@@ -138,8 +262,9 @@ class Sandbox:
     def execute(self, code: str) -> ExecutionResult:
         q: Queue[ExecutionResult] = Queue()
         p = Process(target=self._worker, args=(code, self._state, q))
+        result: ExecutionResult
 
-        if not self._is_code_safe(code):
+        if self._is_code_not_safe(code):
             return ExecutionResult(
                 error="Code contains disallowed operations."
             )
@@ -150,11 +275,36 @@ class Sandbox:
             p.terminate()
             p.join(timeout=1)
             p.kill()
-            if not q.empty():
-                return q.get()
-            return ExecutionResult(
-                error="Execution timed out.",
-                timed_out=True,
-                duration_ms=self.config.max_execution_time_seconds * 1000,
-            )
-        return q.get()
+            try:
+                result = q.get(timeout=1)
+            except Empty:
+                result = ExecutionResult(
+                    error="Execution timed out.",
+                    timed_out=True,
+                    duration_ms=self.config.max_execution_time_seconds * 1000,
+                )
+        else:
+            result = q.get()
+        return result
+
+    def get_manual(self) -> str:
+        return (
+            f"Manual for the sandbox environment."
+            f"{self.config.max_execution_time_seconds} seconds max"
+            f"execution time, {self.config.max_memory_mb} MB max memory."
+            f"Authorized imports: {self.config.authorized_imports}."
+            f"Authorized builtins: {self.config.authorized_builtins}."
+            f"Authorized attributes: {self.config.authorized_attributes}."
+            f"Authorized file path: {self.config.allowed_directories}."
+            f"{self.config.max_output_length} characters max output."
+            "No network access is allowed."
+            "Variables persist across execute() calls within the same session "
+            "(like a REPL/notebook cell). Do not assume a clean state after a"
+            "failed execution. To clear the state, call the close() method."
+            "You can use the final_answer(value) function to return a final"
+            " answer from your code. But it must be a string or convertible "
+            "to a string."
+        )
+
+    def close(self) -> None:
+        self._state = self._make_initial_state()
