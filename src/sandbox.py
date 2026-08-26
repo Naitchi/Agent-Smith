@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout, redirect_stderr
 from multiprocessing import Process, Queue
-from typing import Any, Dict
+from typing import Any, Callable, Dict, IO
 from types import FrameType
 from queue import Empty
 import builtins
@@ -10,8 +10,10 @@ import resource
 import signal
 import socket
 import time
+import types
 import ast
 import io
+import os
 
 from schemas import ExecutionResult
 from schemas import SandboxConfig
@@ -26,12 +28,56 @@ class Sandbox:
         self.config = config
         self._state: Dict[str, Any] = self._make_initial_state()
 
+    def _restricted_import(
+        self,
+        name: str,
+        globals: Dict[str, object] | None = None,
+        locals: Dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> types.ModuleType:
+        if name not in self.config.authorized_imports:
+            raise ImportError(f"Import of module '{name}' is not allowed.")
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    def _restricted_open(
+        self,
+        file: str,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+        closefd: bool = True,
+        opener: Callable[[str, int], int] | None = None,
+    ) -> IO[str] | IO[bytes]:
+        real_path = os.path.realpath(file)
+        for allowed_dir in self.config.allowed_directories:
+            if real_path == allowed_dir or real_path.startswith(
+                f"{allowed_dir}/"
+            ):
+                return builtins.open(
+                    file,
+                    mode,
+                    buffering,
+                    encoding,
+                    errors,
+                    newline,
+                    closefd,
+                    opener,
+                )
+        raise PermissionError(f"Access to file '{file}' is not allowed.")
+
     def _make_initial_state(self) -> Dict[str, Any]:
         allowed_builtins = {
             name: getattr(builtins, name)
             for name in self.config.authorized_builtins
             if hasattr(builtins, name)
         }
+        if "__import__" in self.config.authorized_builtins:
+            allowed_builtins["__import__"] = self._restricted_import
+        if "open" in self.config.authorized_builtins:
+            allowed_builtins["open"] = self._restricted_open
         return {
             "__builtins__": allowed_builtins,
             "final_answer": self._final_answer,
@@ -73,7 +119,8 @@ class Sandbox:
             return True
         return False
 
-    # TODO Implement this function to check if the code is trying to access disallowed file paths
+    # TODO Implement this function to check if the code is trying
+    # to access disallowed file paths
     def _check_path_access(self, code: str) -> str: ...
 
     def _is_code_not_safe(self, code: str) -> bool:
@@ -127,6 +174,14 @@ class Sandbox:
         signal.signal(signal.SIGTERM, self._timeout_handler)
         limit_bytes = self.config.max_memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+        resource.setrlimit(
+            resource.RLIMIT_NPROC,
+            (self.config.max_processes, self.config.max_processes),
+        )
+        resource.setrlimit(
+            resource.RLIMIT_NOFILE,
+            (self.config.max_open_files, self.config.max_open_files),
+        )
         stderr_buf = io.StringIO()
         stdout_buf = io.StringIO()
 
