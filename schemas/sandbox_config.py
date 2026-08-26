@@ -129,6 +129,7 @@ class SandboxConfig(BaseModel):
             "KeyboardInterrupt",
             "SystemExit",
             "__import__",
+            "open",
         ]
     )
     authorized_attributes: List[str] = Field(
