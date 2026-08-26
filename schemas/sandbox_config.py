@@ -11,8 +11,8 @@ class SandboxConfig(BaseModel):
     max_execution_time_seconds: int = 30
     max_memory_mb: int = 512
     max_output_length: int = 10000
-    # TODO add a way to configure allowed directories for file access and add
-    # security checks in the sandbox to prevent access to other directories
+    max_open_files: int = 256
+    max_processes: int = 4096
     allowed_directories: List[str] = Field(
         default_factory=lambda: ["/testbed", "/tmp/agent"]
     )
@@ -130,6 +130,7 @@ class SandboxConfig(BaseModel):
             "SystemExit",
             "__import__",
             "open",
+            "__build_class__",
         ]
     )
     authorized_attributes: List[str] = Field(

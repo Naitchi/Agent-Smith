@@ -174,6 +174,14 @@ class Sandbox:
         signal.signal(signal.SIGTERM, self._timeout_handler)
         limit_bytes = self.config.max_memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+        resource.setrlimit(
+            resource.RLIMIT_NPROC,
+            (self.config.max_processes, self.config.max_processes),
+        )
+        resource.setrlimit(
+            resource.RLIMIT_NOFILE,
+            (self.config.max_open_files, self.config.max_open_files),
+        )
         stderr_buf = io.StringIO()
         stdout_buf = io.StringIO()
 
