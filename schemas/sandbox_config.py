@@ -20,15 +20,12 @@ class SandboxConfig(BaseModel):
     authorized_imports: List[str] = Field(
         default_factory=lambda: [
             "math",
-            "math.*",
             "random",
             "datetime",
-            "datetime.*",
             "time",
             "itertools",
             "functools",
             "collections",
-            "collections.*",
             "operator",
             "string",
             "re",
@@ -46,7 +43,6 @@ class SandboxConfig(BaseModel):
             "contextlib",
             "abc",
             "typing",
-            "typing.*",
             "cmath",
         ]
     )
@@ -132,39 +128,15 @@ class SandboxConfig(BaseModel):
             "GeneratorExit",
             "KeyboardInterrupt",
             "SystemExit",
+            "__import__",
         ]
     )
     authorized_attributes: List[str] = Field(
         default_factory=lambda: [
-            "__class__",
-            "__bases__",
-            "__base__",
-            "__mro__",
-            "__subclasses__",
-            "__globals__",
-            "__reduce__",
-            "__reduce_ex__",
-            "__init_subclass__",
-            "__init__",
-            "__new__",
-            "__call__",
-            "__str__",
-            "__repr__",
-            "__format__",
-            "__sizeof__",
-            "__dir__",
             "__doc__",
+            "__name__",
             "__module__",
             "__annotations__",
-            "__kwdefaults__",
-            "__defaults__",
-            "__code__",
-            "__closure__",
-            "__func__",
-            "__self__",
-            "__dict__",
-            "__weakref__",
-            "__slots__",
-            "__getattribute__",
+            "__build_class__",
         ]
     )

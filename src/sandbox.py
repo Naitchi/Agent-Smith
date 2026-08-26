@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout, redirect_stderr
 from multiprocessing import Process, Queue
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from types import FrameType
 from queue import Empty
 import builtins
@@ -26,12 +26,26 @@ class Sandbox:
         self.config = config
         self._state: Dict[str, Any] = self._make_initial_state()
 
+    def _restricted_import(
+        self,
+        name: str,
+        globals: Optional[Dict[str, Any]] = None,
+        locals: Optional[Dict[str, Any]] = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> Any:
+        if name not in self.config.authorized_imports:
+            raise ImportError(f"Import of module '{name}' is not allowed.")
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
     def _make_initial_state(self) -> Dict[str, Any]:
         allowed_builtins = {
             name: getattr(builtins, name)
             for name in self.config.authorized_builtins
             if hasattr(builtins, name)
         }
+        if "__import__" in self.config.authorized_builtins:
+            allowed_builtins["__import__"] = self._restricted_import
         return {
             "__builtins__": allowed_builtins,
             "final_answer": self._final_answer,
@@ -73,7 +87,8 @@ class Sandbox:
             return True
         return False
 
-    # TODO Implement this function to check if the code is trying to access disallowed file paths
+    # TODO Implement this function to check if the code is trying
+    # to access disallowed file paths
     def _check_path_access(self, code: str) -> str: ...
 
     def _is_code_not_safe(self, code: str) -> bool:
