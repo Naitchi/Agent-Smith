@@ -1,5 +1,5 @@
 """Boucle ReAct : générer du code, l'exécuter, observer, recommencer."""
-from .llm import open_router_complete as groq_complete
+from ..llm import GroqLLM, OpenRouterLLM
 from .parsing import extract_code
 from schemas import SandboxConfig
 from ..sandbox import Sandbox
@@ -12,11 +12,17 @@ Les variables persistent d'une étape à l'autre.
 Quand tu as la réponse définitive, appelle final_answer(valeur).
 """
 
-MODEL = "openai/gpt-oss-20b"
+MODEL_GROQ = "openai/gpt-oss-20b"
+MODEL_GEMINI = 
 
+# TODO add agentloop class  
 
-def run(task: str, max_steps: int = 6):
+def run(task: str, llm: "GroqLLM" | "GeminiLLM", max_steps: int = 6):
     sandbox = Sandbox(SandboxConfig())
+    if test == 1:
+        agent = GroqLLM(MODEL)
+    elif test == 2:
+        agent  == OpenRouterLLM(MODEL)
     messages = [{"role": "user", "content": task}]
     try:
         for step in range(1, max_steps + 1):
