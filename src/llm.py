@@ -7,31 +7,17 @@ callable as `llm(system, messages) -> LLMResult`, which is the shape
 
 import os
 import time
-from abc import abstractmethod, ABC
-from dataclasses import dataclass
 
 import httpx
 from dotenv import load_dotenv
 
+from schemas import LLMResult
+
 load_dotenv()
-list_possible
+
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
-
-@dataclass
-class LLMResult:
-    text: str
-    input_tokens: int
-    output_tokens: int
-    latency_ms: float
-
-
-# class Gene_llm(ABC):
-#     def __init__(self, model: str, name: str):
-#         self.model = model
-
-    
 
 class GroqLLM:
     def __init__(self, model: str) -> None:
@@ -72,15 +58,14 @@ class GeminiLLM:
     def __call__(self, system: str, messages: list[dict]) -> LLMResult:
         start = time.monotonic()
         response = httpx.post(
-            OPENROUTER_API_URL,
+            GEMINI_API_URL,
             headers={
-                "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+                "Authorization": f"Bearer {os.environ['GEMINI_API_KEY']}",
                 "content-type": "application/json",
             },
             json={
                 "model": self.model,
                 "max_tokens": 2048,
-                "tool_choice": None,
                 "messages": [{"role": "system", "content": system}] + messages,
             },
             timeout=60.0,

@@ -1,5 +1,5 @@
 """Boucle ReAct : générer du code, l'exécuter, observer, recommencer."""
-from ..llm import GroqLLM, OpenRouterLLM
+from ..llm import GroqLLM, GeminiLLM
 from .parsing import extract_code
 from schemas import SandboxConfig
 from ..sandbox import Sandbox
@@ -13,20 +13,45 @@ Quand tu as la réponse définitive, appelle final_answer(valeur).
 """
 
 MODEL_GROQ = "openai/gpt-oss-20b"
-MODEL_GEMINI = 
+MODEL_GEMINI = "gemini-2.5-flash-lite"
 
-# TODO add agentloop class  
+AUTHORIZED_GROQ = [
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+]
+AUTHORIZED_GEMINI = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+]
 
-def run(task: str, llm: "GroqLLM" | "GeminiLLM", max_steps: int = 6):
+AUTHORIZED_LLM: list[str] = []
+AUTHORIZED_LLM.extend(AUTHORIZED_GROQ)
+AUTHORIZED_LLM.extend(AUTHORIZED_GEMINI)
+
+# TODO add agentloop class
+
+def run(task: str, llm: GroqLLM | GeminiLLM, model: str, max_steps: int = 6):
+    if model not in AUTHORIZED_LLM:
+        raise ValueError(f"'{model}' is not an authorized model. Check AUTHORIZED_LLM for the allowed list.")
+
+    if model in AUTHORIZED_GROQ:
+        expected_provider = GroqLLM
+    else:
+        expected_provider = GeminiLLM
+
+    if not isinstance(llm, expected_provider):
+        raise ValueError(
+            f"'{model}' belongs to {expected_provider.__name__}, but the llm passed in is a {type(llm).__name__}."
+        )
+
     sandbox = Sandbox(SandboxConfig())
-    if test == 1:
-        agent = GroqLLM(MODEL)
-    elif test == 2:
-        agent  == OpenRouterLLM(MODEL)
     messages = [{"role": "user", "content": task}]
     try:
         for step in range(1, max_steps + 1):
-            reply = groq_complete(MODEL, SYSTEM, messages)
+            reply = llm(SYSTEM, messages)
             messages.append({"role": "assistant", "content": reply.text})
 
             code = extract_code(reply.text)
@@ -57,4 +82,9 @@ def run(task: str, llm: "GroqLLM" | "GeminiLLM", max_steps: int = 6):
 
 
 if __name__ == "__main__":
-    print(run("Calcule la somme des nombres premiers < 100."))
+    llm = GroqLLM(MODEL_GROQ)
+    print(run(
+        "Calcule la somme des nombres premiers < 100.",
+        llm=llm,
+        model=MODEL_GROQ,
+    ))
