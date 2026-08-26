@@ -23,7 +23,10 @@ class GroqLLM:
     def __init__(self, model: str) -> None:
         self.model = model
 
-    def __call__(self, system: str, messages: list[dict]) -> LLMResult:
+    def __call__(
+            self, 
+            system: str, 
+            messages: list[dict]) -> LLMResult:
         start = time.monotonic()
         response = httpx.post(
             GROQ_API_URL,
@@ -35,7 +38,12 @@ class GroqLLM:
                 "model": self.model,
                 "max_tokens": 2048,
                 "tool_choice": "none",
-                "messages": [{"role": "system", "content": system}] + messages,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system
+                        }
+                        ] + messages,
             },
             timeout=60.0,
         )
@@ -55,7 +63,10 @@ class GeminiLLM:
     def __init__(self, model: str) -> None:
         self.model = model
 
-    def __call__(self, system: str, messages: list[dict]) -> LLMResult:
+    def __call__(
+            self, 
+            system: str, 
+            messages: list[dict]) -> LLMResult:
         start = time.monotonic()
         response = httpx.post(
             GEMINI_API_URL,
@@ -66,7 +77,12 @@ class GeminiLLM:
             json={
                 "model": self.model,
                 "max_tokens": 2048,
-                "messages": [{"role": "system", "content": system}] + messages,
+                "messages": [
+                    {
+                        "role": "system", 
+                        "content": system
+                        }
+                        ] + messages,
             },
             timeout=60.0,
         )
