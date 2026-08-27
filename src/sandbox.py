@@ -195,94 +195,33 @@ class Sandbox:
         stdout_buf = io.StringIO()
 
         start = time.time()
+        result = ExecutionResult()
         try:
             with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
                 exec(code, namespace)
         except self._FinalAnswer as fa:
-            stdout, stderr, truncated = self._get_stdout_stderr(
-                stdout_buf, stderr_buf
-            )
             try:
-                answer = str(fa.value)
+                result.final_answer = str(fa.value)
             except Exception:
-                answer = "final_answer value could not be converted to string"
-            queue.put(
-                (
-                    ExecutionResult(
-                        stdout=stdout,
-                        stderr=stderr,
-                        final_answer=answer,
-                        truncated=truncated,
-                        duration_ms=(time.time() - start) * 1000,
-                    ),
-                    self._save_namespace(namespace),
+                result.final_answer = (
+                    "final_answer value could not be converted to string"
                 )
-            )
         except TimeoutError:
-            stdout, stderr, truncated = self._get_stdout_stderr(
-                stdout_buf, stderr_buf
-            )
-            queue.put(
-                (
-                    ExecutionResult(
-                        stdout=stdout,
-                        stderr=stderr,
-                        error="Execution timed out.",
-                        timed_out=True,
-                        truncated=truncated,
-                        duration_ms=self.config.max_execution_time_seconds
-                        * 1000,
-                    ),
-                    self._save_namespace(namespace),
-                )
-            )
+            result.error = "Execution timed out."
+            result.timed_out = True
+            result.duration_ms = self.config.max_execution_time_seconds * 1000
         except MemoryError:
-            stdout, stderr, truncated = self._get_stdout_stderr(
-                stdout_buf, stderr_buf
-            )
-            queue.put(
-                (
-                    ExecutionResult(
-                        stdout=stdout,
-                        stderr=stderr,
-                        error="Memory limit exceeded.",
-                        truncated=truncated,
-                        duration_ms=(time.time() - start) * 1000,
-                    ),
-                    self._save_namespace(namespace),
-                ),
-            )
+            result.error = "Memory limit exceeded."
         except Exception as e:
-            stdout, stderr, truncated = self._get_stdout_stderr(
-                stdout_buf, stderr_buf
-            )
-            queue.put(
-                (
-                    ExecutionResult(
-                        stdout=stdout,
-                        stderr=stderr,
-                        error=str(e),
-                        truncated=truncated,
-                        duration_ms=(time.time() - start) * 1000,
-                    ),
-                    self._save_namespace(namespace),
-                )
-            )
-        else:
-            stdout, stderr, truncated = self._get_stdout_stderr(
-                stdout_buf, stderr_buf
-            )
-            queue.put(
-                (
-                    ExecutionResult(
-                        stdout=stdout,
-                        stderr=stderr,
-                        truncated=truncated,
-                        duration_ms=(time.time() - start) * 1000,
-                    ),
-                    self._save_namespace(namespace),
-                )
-            )
+            result.error = str(e)
+
+        if not result.timed_out:
+            result.duration_ms = (time.time() - start) * 1000
+
+        result.stdout, result.stderr, result.truncated = (
+            self._get_stdout_stderr(stdout_buf, stderr_buf)
+        )
+        queue.put((result, self._save_namespace(namespace)))
 
     def execute(self, code: str) -> ExecutionResult:
         q: Queue[tuple[ExecutionResult, bytes]] = Queue()
