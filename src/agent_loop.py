@@ -36,7 +36,7 @@ class AgentLoop:
             task_id: str, 
             benchmark: str, 
             user_prompt:str) -> SolutionOutput:
-        start = time.monotonic
+        start = time.monotonic()
         message: list[dict] = [
             {
                 "role": "user",
@@ -54,19 +54,19 @@ class AgentLoop:
             request_conv_time = (time.monotonic() - request_start) * 1000
 
             total_request += 1
-            total_input_tokens += result.input_token
-            total_output_token += result.output_token
+            total_input_tokens += result.input_tokens
+            total_output_token += result.output_tokens
             message.append(
                 {
                     "role": "assistant",
                     "content": result.text
                 }
             )
-            code = extract_code(result.txt)
+            code = extract_code(result.text)
             final_answer: str | None = None
             if code is None:
                 sandbox_input = ""
-                sandbox_output = "no code was found sorry"
+                sandbox_output = "No valid code block was found in the model's response."
             else:
                 sandbox_input = code
                 exec_res = self.sandbox.execute(code)
@@ -74,26 +74,25 @@ class AgentLoop:
                     final_answer = exec_res.final_answer
                     sandbox_output = exec_res.stdout or ""
                 elif exec_res.error:
-                    sandbox_output = f"error {exec_res.error}"
+                    sandbox_output = f"error: {exec_res.error}"
                 else:
                     sandbox_output = exec_res.stdout or "nothing bro"
-            message.append([
+            message.append(
                 {
                     "role": "user",
                     "content": f"observation\n{sandbox_output}"
                 }
-            ])
+            )
 
             steps.append(
-                StepMetrics
-                (
+                StepMetrics(
                     step=step,
-                    input_token=result.input_tokens,
-                    output_token=result.output_tokens,
-                    time_ml=request_conv_time,
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
+                    request_time_ms=request_conv_time,
                     api_url=self.api_url,
                     model_name=self.model_name,
-                    llm_output=result,
+                    llm_output=result.text,
                     sandbox_input=sandbox_input,
                     sandbox_output=sandbox_output,
                     retries=0
@@ -113,5 +112,75 @@ class AgentLoop:
                     steps,
                     None
                 )
-            
+            def budget_exceeded() -> str | None:
+                if self.max_input_tokens is not None \
+                    and total_input_tokens >= self.max_input_tokens:
+                    return "max_input_tokens exceeded"
+                if self.max_output_tokens is not None \
+                    and total_output_token >= self.max_output_tokens:
+                    return "max_output_tokens exceeded"
+                if (
+                    self.max_wall_time_seconds is not None
+                    and (time.monotonic() - start) >= self.max_wall_time_seconds
+                ):
+                    return "max_wall_time_seconds exceeded"
+                return None
 
+            error = budget_exceeded()
+            if error is not None:
+                return self.__output__(
+                    task_id,
+                    benchmark,
+                    False,
+                    "",
+                    step,
+                    total_request,
+                    total_input_tokens,
+                    total_output_token,
+                    start,
+                    steps,
+                    error
+                )
+
+        return self.__output__(
+            task_id,
+            benchmark,
+            False,
+            "",
+            self.max_iterations,
+            total_request,
+            total_input_tokens,
+            total_output_token,
+            start,
+            steps,
+            "max_iterations reached without final_answer",
+        )
+
+    def __output__(
+        self,
+        task_id: str,
+        benchmark: str,
+        success: bool,
+        solution: str,
+        iterations: int,
+        total_requests: int,
+        total_input_tokens: int,
+        total_output_tokens: int,
+        start: float,
+        steps: list[StepMetrics],
+        error: str | None,
+    ) -> SolutionOutput:
+        return SolutionOutput(
+            task_id=task_id,
+            benchmark=benchmark,
+            success=success,
+            solution=solution,
+            iterations=iterations,
+            total_requests=total_requests,
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            total_time_seconds=time.monotonic() - start,
+            steps=steps,
+            system_prompt=self.system_prompt,
+            error=error,
+        )
