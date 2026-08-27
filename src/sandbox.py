@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout, redirect_stderr
+from typing import Any, Callable, Dict, IO, Optional
 from multiprocessing import Process, Queue
-from typing import Any, Callable, Dict, IO
 from types import FrameType
 from queue import Empty
 import builtins
 import resource
 import signal
 import socket
-import time
 import types
+import dill
+import time
 import ast
-import io
 import os
+import io
 
 from schemas import ExecutionResult
 from schemas import SandboxConfig
@@ -26,7 +27,8 @@ class Sandbox:
 
     def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
         self.config = config
-        self._state: Dict[str, Any] = self._make_initial_state()
+        self._namespace: Dict[str, Any] = self._make_initial_namespace()
+        self._namespace_save: Optional[bytes] = None
 
     def _restricted_import(
         self,
@@ -68,7 +70,10 @@ class Sandbox:
                 )
         raise PermissionError(f"Access to file '{file}' is not allowed.")
 
-    def _make_initial_state(self) -> Dict[str, Any]:
+    def _save_namespace(self, namespace: Dict[str, Any]) -> bytes:
+        return dill.dumps(namespace)
+
+    def _make_initial_namespace(self) -> Dict[str, Any]:
         allowed_builtins = {
             name: getattr(builtins, name)
             for name in self.config.authorized_builtins
@@ -80,6 +85,7 @@ class Sandbox:
             allowed_builtins["open"] = self._restricted_open
         return {
             "__builtins__": allowed_builtins,
+            "__name__": "__sandbox__",
             "final_answer": self._final_answer,
         }
 
@@ -118,10 +124,6 @@ class Sandbox:
         ):
             return True
         return False
-
-    # TODO Implement this function to check if the code is trying
-    # to access disallowed file paths
-    def _check_path_access(self, code: str) -> str: ...
 
     def _is_code_not_safe(self, code: str) -> bool:
         try:
@@ -168,7 +170,11 @@ class Sandbox:
         raise self._FinalAnswer(answer)
 
     def _worker(
-        self, code: str, state: Dict[str, Any], queue: Queue[ExecutionResult]
+        self,
+        code: str,
+        namespace: Dict[str, Any],
+        namespace_save: Optional[bytes],
+        queue: Queue[tuple[ExecutionResult, bytes]],
     ) -> None:
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
@@ -182,13 +188,16 @@ class Sandbox:
             resource.RLIMIT_NOFILE,
             (self.config.max_open_files, self.config.max_open_files),
         )
+        if namespace_save is not None:
+            namespace.update(dill.loads(namespace_save))
+
         stderr_buf = io.StringIO()
         stdout_buf = io.StringIO()
 
         start = time.time()
         try:
             with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
-                exec(code, state)
+                exec(code, namespace)
         except self._FinalAnswer as fa:
             stdout, stderr, truncated = self._get_stdout_stderr(
                 stdout_buf, stderr_buf
@@ -198,12 +207,15 @@ class Sandbox:
             except Exception:
                 answer = "final_answer value could not be converted to string"
             queue.put(
-                ExecutionResult(
-                    stdout=stdout,
-                    stderr=stderr,
-                    final_answer=answer,
-                    truncated=truncated,
-                    duration_ms=(time.time() - start) * 1000,
+                (
+                    ExecutionResult(
+                        stdout=stdout,
+                        stderr=stderr,
+                        final_answer=answer,
+                        truncated=truncated,
+                        duration_ms=(time.time() - start) * 1000,
+                    ),
+                    self._save_namespace(namespace),
                 )
             )
         except TimeoutError:
@@ -211,13 +223,17 @@ class Sandbox:
                 stdout_buf, stderr_buf
             )
             queue.put(
-                ExecutionResult(
-                    stdout=stdout,
-                    stderr=stderr,
-                    error="Execution timed out.",
-                    timed_out=True,
-                    truncated=truncated,
-                    duration_ms=self.config.max_execution_time_seconds * 1000,
+                (
+                    ExecutionResult(
+                        stdout=stdout,
+                        stderr=stderr,
+                        error="Execution timed out.",
+                        timed_out=True,
+                        truncated=truncated,
+                        duration_ms=self.config.max_execution_time_seconds
+                        * 1000,
+                    ),
+                    self._save_namespace(namespace),
                 )
             )
         except MemoryError:
@@ -225,25 +241,31 @@ class Sandbox:
                 stdout_buf, stderr_buf
             )
             queue.put(
-                ExecutionResult(
-                    stdout=stdout,
-                    stderr=stderr,
-                    error="Memory limit exceeded.",
-                    truncated=truncated,
-                    duration_ms=(time.time() - start) * 1000,
-                )
+                (
+                    ExecutionResult(
+                        stdout=stdout,
+                        stderr=stderr,
+                        error="Memory limit exceeded.",
+                        truncated=truncated,
+                        duration_ms=(time.time() - start) * 1000,
+                    ),
+                    self._save_namespace(namespace),
+                ),
             )
         except Exception as e:
             stdout, stderr, truncated = self._get_stdout_stderr(
                 stdout_buf, stderr_buf
             )
             queue.put(
-                ExecutionResult(
-                    stdout=stdout,
-                    stderr=stderr,
-                    error=str(e),
-                    truncated=truncated,
-                    duration_ms=(time.time() - start) * 1000,
+                (
+                    ExecutionResult(
+                        stdout=stdout,
+                        stderr=stderr,
+                        error=str(e),
+                        truncated=truncated,
+                        duration_ms=(time.time() - start) * 1000,
+                    ),
+                    self._save_namespace(namespace),
                 )
             )
         else:
@@ -251,18 +273,25 @@ class Sandbox:
                 stdout_buf, stderr_buf
             )
             queue.put(
-                ExecutionResult(
-                    stdout=stdout,
-                    stderr=stderr,
-                    truncated=truncated,
-                    duration_ms=(time.time() - start) * 1000,
+                (
+                    ExecutionResult(
+                        stdout=stdout,
+                        stderr=stderr,
+                        truncated=truncated,
+                        duration_ms=(time.time() - start) * 1000,
+                    ),
+                    self._save_namespace(namespace),
                 )
             )
 
     def execute(self, code: str) -> ExecutionResult:
-        q: Queue[ExecutionResult] = Queue()
-        p = Process(target=self._worker, args=(code, self._state, q))
+        q: Queue[tuple[ExecutionResult, bytes]] = Queue()
+        p = Process(
+            target=self._worker,
+            args=(code, self._namespace, self._namespace_save, q),
+        )
         result: ExecutionResult
+        namespace_bytes: Optional[bytes] = None
 
         if self._is_code_not_safe(code):
             return ExecutionResult(
@@ -276,35 +305,39 @@ class Sandbox:
             p.join(timeout=1)
             p.kill()
             try:
-                result = q.get(timeout=1)
+                result, namespace_bytes = q.get(timeout=1)
             except Empty:
+                namespace_bytes = None
                 result = ExecutionResult(
                     error="Execution timed out.",
                     timed_out=True,
                     duration_ms=self.config.max_execution_time_seconds * 1000,
                 )
         else:
-            result = q.get()
+            result, namespace_bytes = q.get()
+        if namespace_bytes is not None:
+            self._namespace_save = namespace_bytes
         return result
 
     def get_manual(self) -> str:
         return (
-            f"Manual for the sandbox environment."
-            f"{self.config.max_execution_time_seconds} seconds max"
-            f"execution time, {self.config.max_memory_mb} MB max memory."
-            f"Authorized imports: {self.config.authorized_imports}."
-            f"Authorized builtins: {self.config.authorized_builtins}."
-            f"Authorized attributes: {self.config.authorized_attributes}."
-            f"Authorized file path: {self.config.allowed_directories}."
-            f"{self.config.max_output_length} characters max output."
-            "No network access is allowed."
+            f"Manual for the sandbox environment. "
+            f"{self.config.max_execution_time_seconds} seconds max "
+            f"execution time, {self.config.max_memory_mb} MB max memory. "
+            f"Authorized imports: {self.config.authorized_imports}. "
+            f"Authorized builtins: {self.config.authorized_builtins}. "
+            f"Authorized attributes: {self.config.authorized_attributes}. "
+            f"Authorized file path: {self.config.allowed_directories}. "
+            f"{self.config.max_output_length} characters max output. "
+            "No network access is allowed. "
             "Variables persist across execute() calls within the same session "
-            "(like a REPL/notebook cell). Do not assume a clean state after a"
-            "failed execution. To clear the state, call the close() method."
-            "You can use the final_answer(value) function to return a final"
-            " answer from your code. But it must be a string or convertible "
-            "to a string."
+            "(like a REPL/notebook cell). Do not assume a clean namespace"
+            " after a failed execution. To clear the namespace, call the "
+            "close() method. You can use the final_answer(value) function to"
+            " return a final answer from your code. But it must be a string "
+            "or convertible to a string."
         )
 
     def close(self) -> None:
-        self._state = self._make_initial_state()
+        self._namespace = self._make_initial_namespace()
+        self._namespace_save = None
