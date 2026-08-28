@@ -12,26 +12,35 @@ Les variables persistent d'une étape à l'autre.
 Quand tu as la réponse définitive, appelle final_answer(valeur).
 """
 
-MODEL_GROQ = "openai/gpt-oss-20b"
-MODEL_GEMINI = "gemini-2.5-flash-lite"
+# MODEL_GROQ = "openai/gpt-oss-20b"
+# MODEL_GEMINI = "gemini-3.5-flash-lite"
 
+# Listes verifiees le 2026-08-28 par un vrai appel /chat/completions.
+# Attention : l'endpoint /models liste des modeles qui repondent 404 a
+# l'usage ("no longer available to new users"), il ne fait pas foi.
 AUTHORIZED_GROQ = [
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
+    "qwen/qwen3.6-27b",
+    "qwen/qwen3.8-27b",
+    "groq/compound",
+    "groq/compound-mini",
 ]
 AUTHORIZED_GEMINI = [
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
+    "gemini-3.7-flash", 
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
 ]
 
 AUTHORIZED_LLM: list[str] = []
 AUTHORIZED_LLM.extend(AUTHORIZED_GROQ)
 AUTHORIZED_LLM.extend(AUTHORIZED_GEMINI)
 
-# TODO add agentloop class
 
 def run(task: str, llm: GroqLLM | GeminiLLM, model: str, max_steps: int = 6):
     if model not in AUTHORIZED_LLM:

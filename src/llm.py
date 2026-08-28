@@ -52,7 +52,7 @@ class GroqLLM:
         body = response.json()
         usage = body.get("usage", {})
         return LLMResult(
-            text=body["choices"][0]["message"]["content"],
+            text=body["choices"][0]["message"]["extra_content"],
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
             latency_ms=latency_ms,
