@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, IO, Optional
 from multiprocessing import Process, Queue
 from types import FrameType
 from queue import Empty
+import tempfile
 import builtins
 import resource
 import signal
@@ -12,10 +13,7 @@ import socket
 import types
 import dill
 import time
-import types
 import ast
-import os
-import io
 import os
 
 from schemas import ExecutionResult
@@ -91,26 +89,6 @@ class Sandbox:
             "final_answer": self._final_answer,
         }
 
-    def _check_disallowed_imports(self, node: ast.AST) -> bool:
-        if isinstance(node, ast.Import):
-            if len(node.names) > 1:
-                modified_node = [
-                    alias
-                    for alias in node.names
-                    if alias.name not in self.config.authorized_imports
-                ]
-                if len(modified_node) > 0:
-                    return True
-            elif (
-                len(node.names) == 1
-                and node.names[0].name not in self.config.authorized_imports
-            ):
-                return True
-        elif isinstance(node, ast.ImportFrom):
-            if node.module not in self.config.authorized_imports:
-                return True
-        return False
-
     def _check_disallowed_attributes(self, node: ast.AST) -> bool:
         if (
             isinstance(node, ast.Call)
@@ -134,13 +112,7 @@ class Sandbox:
             return True
 
         for node in ast.walk(tree):
-            if isinstance(node, ast.Import) or isinstance(
-                node, ast.ImportFrom
-            ):
-                node = self._check_disallowed_imports(node)
-                if node:
-                    return True
-            elif (
+            if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
             ) or isinstance(node, ast.Attribute):
@@ -154,13 +126,19 @@ class Sandbox:
         raise TimeoutError
 
     def _get_stdout_stderr(
-        self, stdout_buf: io.StringIO, stderr_buf: io.StringIO
+        self,
+        temp_stdout: IO[str],
+        temp_stderr: IO[str],
     ) -> tuple[str, str, bool]:
-        stdout = stdout_buf.getvalue()[: self.config.max_output_length]
-        stderr = stderr_buf.getvalue()[: self.config.max_output_length]
-        truncated = (
-            len(stdout_buf.getvalue()) > self.config.max_output_length
-            or len(stderr_buf.getvalue()) > self.config.max_output_length
+        temp_stdout.seek(0)
+        temp_stderr.seek(0)
+        content_stdout = temp_stdout.read()
+        content_stderr = temp_stderr.read()
+        stdout: str = content_stdout[: self.config.max_output_length]
+        stderr: str = content_stderr[: self.config.max_output_length]
+        truncated: bool = (
+            len(content_stdout) > self.config.max_output_length
+            or len(content_stderr) > self.config.max_output_length
         )
         return stdout, stderr, truncated
 
@@ -177,6 +155,8 @@ class Sandbox:
         namespace: Dict[str, Any],
         namespace_save: Optional[bytes],
         queue: Queue[tuple[ExecutionResult, bytes]],
+        temp_stderr: IO[str],
+        temp_stdout: IO[str],
     ) -> None:
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
@@ -193,13 +173,10 @@ class Sandbox:
         if namespace_save is not None:
             namespace.update(dill.loads(namespace_save))
 
-        stderr_buf = io.StringIO()
-        stdout_buf = io.StringIO()
-
         start = time.time()
         result = ExecutionResult()
         try:
-            with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+            with redirect_stdout(temp_stdout), redirect_stderr(temp_stderr):
                 exec(code, namespace)
         except self._FinalAnswer as fa:
             try:
@@ -219,17 +196,27 @@ class Sandbox:
 
         if not result.timed_out:
             result.duration_ms = (time.time() - start) * 1000
-
         result.stdout, result.stderr, result.truncated = (
-            self._get_stdout_stderr(stdout_buf, stderr_buf)
+            self._get_stdout_stderr(temp_stdout, temp_stderr)
         )
+        temp_stderr.close()
+        temp_stdout.close()
         queue.put((result, self._save_namespace(namespace)))
 
     def execute(self, code: str) -> ExecutionResult:
         q: Queue[tuple[ExecutionResult, bytes]] = Queue()
+        temp_stderr: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
+        temp_stdout: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
         p = Process(
             target=self._worker,
-            args=(code, self._namespace, self._namespace_save, q),
+            args=(
+                code,
+                self._namespace,
+                self._namespace_save,
+                q,
+                temp_stderr,
+                temp_stdout,
+            ),
         )
         result: ExecutionResult
         namespace_bytes: Optional[bytes] = None
@@ -254,10 +241,15 @@ class Sandbox:
                     timed_out=True,
                     duration_ms=self.config.max_execution_time_seconds * 1000,
                 )
+                result.stdout, result.stderr, result.truncated = (
+                    self._get_stdout_stderr(temp_stdout, temp_stderr)
+                )
         else:
             result, namespace_bytes = q.get()
         if namespace_bytes is not None:
             self._namespace_save = namespace_bytes
+        temp_stderr.close()
+        temp_stdout.close()
         return result
 
     def get_manual(self) -> str:
