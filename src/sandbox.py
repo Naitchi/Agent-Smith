@@ -14,6 +14,7 @@ import types
 import dill
 import time
 import ast
+import sys
 import os
 
 from schemas import ExecutionResult
@@ -38,9 +39,27 @@ class Sandbox:
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> types.ModuleType:
-        if name not in self.config.authorized_imports:
-            raise ImportError(f"Import of module '{name}' is not allowed.")
-        return builtins.__import__(name, globals, locals, fromlist, level)
+        if "." in name:
+            if f"{name.split('.')[0]}.*" not in self.config.authorized_imports:
+                raise ImportError(f"Import of module '{name}' is not allowed.")
+        else:
+            if name not in self.config.authorized_imports:
+                raise ImportError(f"Import of module '{name}' is not allowed.")
+        module = builtins.__import__(name, globals, locals, fromlist, level)
+        unauthorized: list[str] = []
+        for from_name in fromlist or ():
+            attr = getattr(module, from_name, None)
+            if isinstance(attr, types.ModuleType):
+                sub_name = f"{name}.{from_name}"
+                if f"{name}.*" not in self.config.authorized_imports:
+                    delattr(module, from_name)
+                    sys.modules.pop(sub_name, None)
+                    unauthorized.append(sub_name)
+        if unauthorized:
+            raise ImportError(
+                f"Import of module/s {', '.join(unauthorized)} is not allowed."
+            )
+        return module
 
     def _restricted_open(
         self,
