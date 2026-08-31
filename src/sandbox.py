@@ -328,3 +328,23 @@ def main() -> None:
         sandbox = Sandbox(config)
     else:
         sandbox = Sandbox()
+    try:
+        # TODO voir pour tester avec du code avec des fonctions de plusieurs
+        # lignes avec codeop ? ou code.InteractiveConsole ?
+        print(
+            "\nSandbox REPL. Enter the code you need to execute. Each line "
+            "will be executed and remenbered. Type 'reset' to reset the "
+            "sandbox, or 'exit' to exit."
+        )
+        while True:
+            line_of_code = input(">>>")
+            if line_of_code.strip() == "exit":
+                raise KeyboardInterrupt
+            elif line_of_code.strip() == "reset":
+                sandbox.close()
+                print("\nSandbox namespace has been reset.")
+            print(sandbox.execute(line_of_code), "\n")
+    except (KeyboardInterrupt, EOFError):
+        print("\nExiting.")
+    except Exception as e:
+        print(f"\nError in sandbox: {e}", file=sys.stderr)
