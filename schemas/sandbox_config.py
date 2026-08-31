@@ -20,16 +20,20 @@ class SandboxConfig(BaseModel):
     authorized_imports: List[str] = Field(
         default_factory=lambda: [
             "math",
+            "math.*",
             "random",
             "datetime",
+            "datetime.*",
             "time",
             "itertools",
             "functools",
             "collections",
+            "collections.*",
             "operator",
             "string",
             "re",
             "json",
+            "json.*",
             "decimal",
             "fractions",
             "statistics",
@@ -43,6 +47,7 @@ class SandboxConfig(BaseModel):
             "contextlib",
             "abc",
             "typing",
+            "typing.*",
             "cmath",
         ]
     )
@@ -139,6 +144,5 @@ class SandboxConfig(BaseModel):
             "__name__",
             "__module__",
             "__annotations__",
-            "__build_class__",
         ]
     )
