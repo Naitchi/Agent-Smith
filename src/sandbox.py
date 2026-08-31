@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout, redirect_stderr
+import json
 from typing import Any, Callable, Dict, IO, Optional
 from multiprocessing import Process, Queue
 from types import FrameType
@@ -8,6 +9,7 @@ from queue import Empty
 import tempfile
 import builtins
 import resource
+import argparse
 import signal
 import socket
 import types
@@ -19,6 +21,7 @@ import os
 
 from schemas import ExecutionResult
 from schemas import SandboxConfig
+from schemas.contract_model import SandboxProtocol
 
 
 class Sandbox:
@@ -293,3 +296,35 @@ class Sandbox:
     def close(self) -> None:
         self._namespace = self._make_initial_namespace()
         self._namespace_save = None
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="sandbox")
+    parser.add_argument(
+        "config",
+        nargs="?",
+        default=None,
+        help="Path to a JSON SandBoxConfig file.",
+    )
+    parser.add_argument(
+        "--mcp-stdio",
+        default=None,
+        help="Command to launch an MCP server over stdio.",
+    )
+    parser.add_argument(
+        "--mcp-server",
+        default=None,
+        help="URL of an MCP server to connect to.",
+    )
+    sandbox: SandboxProtocol
+    args = parser.parse_args()
+    if args.config:
+        try:
+            with open(args.config, "r") as f:
+                config = SandboxConfig(**json.load(f))
+        except Exception as e:
+            print(f"Error loading config: {e}", file=sys.stderr)
+            return
+        sandbox = Sandbox(config)
+    else:
+        sandbox = Sandbox()
