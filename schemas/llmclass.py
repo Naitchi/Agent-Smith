@@ -11,7 +11,7 @@ import time
 import httpx
 from dotenv import load_dotenv
 
-from schemas import LLMResult
+from .llm_result import LLMResult
 
 load_dotenv()
 

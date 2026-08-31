@@ -1,7 +1,6 @@
 """Boucle ReAct : générer du code, l'exécuter, observer, recommencer."""
-from ..llm import GroqLLM, GeminiLLM
 from .parsing import extract_code
-from schemas import SandboxConfig
+from schemas import GeminiLLM, GroqLLM, SandboxConfig
 from ..sandbox import Sandbox
 import httpx
 

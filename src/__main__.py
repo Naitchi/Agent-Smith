@@ -8,10 +8,16 @@ from __future__ import annotations
 import os
 import sys
 
-from schemas import AgentLoopConf, SolutionOutput
+from schemas import (
+    AgentLoopConf,
+    GEMINI_API_URL,
+    GROQ_API_URL,
+    GeminiLLM,
+    GroqLLM,
+    SolutionOutput,
+)
 
 from .agent_loop import AgentLoop
-from .llm import GROQ_API_URL, GroqLLM, GEMINI_API_URL, GeminiLLM
 from .sandbox import Sandbox
 
 MODEL = "gemini-3.5-flash"
