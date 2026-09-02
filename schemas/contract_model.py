@@ -1,4 +1,4 @@
-from typing import List, Protocol
+from typing import Protocol
 from pydantic import BaseModel
 
 from .llm_result import LLMResult
@@ -12,14 +12,6 @@ class ExecutionResult(BaseModel):
     timed_out: bool = False
     truncated: bool = False
     duration_ms: float = 0.0
-
-
-class RunTestsResult(BaseModel):
-    stdout: str = ""
-    stderr: str = ""
-    timed_out: bool = False
-    duration_ms: float = 0.0
-    failed: List[str] = []
 
 
 class SandboxProtocol(Protocol):
