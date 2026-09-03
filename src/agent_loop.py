@@ -1,8 +1,15 @@
 from  __future__ import annotations
-import time, json, os, shutil
+import time, json, os, shutil, random
 from pathlib import Path
-from schemas import (AgentLoopConf,
+import httpx
+from schemas import (AUTHORIZED_GEMINI,
+                     AUTHORIZED_GROQ,
+                     GEMINI_API_URL,
+                     GROQ_API_URL,
+                     AgentLoopConf,
                      AgentLoopError,
+                     GeminiLLM,
+                     GroqLLM,
                      ConsecutiveErrorsError,
                      MaxInputTokensError,
                      MaxIterationsError,
@@ -58,7 +65,7 @@ def init_value() -> tuple[int, int, int]:
 class AgentLoop:
     def __init__(
         self,
-        agent_loop_conf: AgentLoopConf
+        agent_loop_conf: AgentLoopConf | None
         ) -> None:
         self.agent_loop = agent_loop_conf
 
@@ -80,14 +87,83 @@ class AgentLoop:
         total_input_tokens, total_output_token, total_request = init_value()
         last_error: str | None = None
         consecutive_errors = 0
+
+
+        gemini_pool = list(AUTHORIZED_GEMINI)
+        groq_pool = list(AUTHORIZED_GROQ)
+        exhausted: list[str] = []
+        if self.agent_loop.model_name in gemini_pool:
+            gemini_pool.remove(self.agent_loop.model_name)
+        elif self.agent_loop.model_name in groq_pool:
+            groq_pool.remove(self.agent_loop.model_name)
+
+        gemini_keys = [k.strip() for k in os.environ.get(
+            "GEMINI_API_KEYS", os.environ.get("GEMINI_API_KEY", "")).split(",") if k.strip()]
+        groq_keys = [k.strip() for k in os.environ.get(
+            "GROQ_API_KEYS", os.environ.get("GROQ_API_KEY", "")).split(",") if k.strip()]
+        key_index = 0
+        if gemini_keys:
+            os.environ["GEMINI_API_KEY"] = gemini_keys[0]
+        if groq_keys:
+            os.environ["GROQ_API_KEY"] = groq_keys[0]
         try:
             for step in range(1, self.agent_loop.max_iterations + 1):
                 try:
-                    request_start = time.monotonic()
-                    result = self.agent_loop.llm(self.agent_loop.system_prompt, message)
-                    request_conv_time = (time.monotonic() - request_start) * 1000
+                    retries = 0
+                    while True:
+                        try:
+                            request_start = time.monotonic()
+                            total_request += 1
+                            result = self.agent_loop.llm(self.agent_loop.system_prompt, message)
+                            request_conv_time = (time.monotonic() - request_start) * 1000
+                            break
+                        except httpx.HTTPStatusError as e:
+                            if e.response.status_code != 429:
+                                raise
+                            retries += 1
+                            on_gemini = self.agent_loop.api_url == GEMINI_API_URL
+                            keys = gemini_keys if on_gemini else groq_keys
+                            key_var = "GEMINI_API_KEY" if on_gemini else "GROQ_API_KEY"
+                            if key_index + 1 < len(keys):
+                                key_index += 1
+                                os.environ[key_var] = keys[key_index]
+                                print(
+                                    f"429 rate limit -> token {key_index + 1}/{len(keys)} "
+                                    f"sur {self.agent_loop.model_name}"
+                                )
+                                continue
+                            key_index = 0
+                            if keys:
+                                os.environ[key_var] = keys[0]
 
-                    total_request += 1
+                            exhausted.append(self.agent_loop.model_name)
+                            if self.agent_loop.model_name in gemini_pool:
+                                gemini_pool.remove(self.agent_loop.model_name)
+                            elif self.agent_loop.model_name in groq_pool:
+                                groq_pool.remove(self.agent_loop.model_name)
+
+
+                            if gemini_pool:
+                                self.agent_loop.model_name = random.choice(gemini_pool)
+                                self.agent_loop.api_url = GEMINI_API_URL
+                                self.agent_loop.llm = GeminiLLM(self.agent_loop.model_name)
+                            elif groq_pool:
+                                self.agent_loop.model_name = random.choice(groq_pool)
+                                self.agent_loop.api_url = GROQ_API_URL
+                                self.agent_loop.llm = GroqLLM(self.agent_loop.model_name)
+                                if groq_keys:
+                                    os.environ["GROQ_API_KEY"] = groq_keys[0]
+                            else:
+                                raise AgentLoopError(
+                                    f"plus aucun modele disponible, "
+                                    f"{len(exhausted)} epuises par rate limit -> "
+                                    f"{', '.join(exhausted)}"
+                                )
+                            print(
+                                f"429 rate limit -> bascule sur {self.agent_loop.model_name} "
+                                f"({self.agent_loop.api_url})"
+                            )
+
                     total_input_tokens += result.input_tokens
                     total_output_token += result.output_tokens
                     message.append(
@@ -129,7 +205,7 @@ class AgentLoop:
                             llm_output=result.text,
                             sandbox_input=sandbox_input,
                             sandbox_output=sandbox_output,
-                            retries=0
+                            retries=retries
                             )
                         )
                     if final_answer is not None:
@@ -151,6 +227,13 @@ class AgentLoop:
                         )
                     consecutive_errors = 0
                     self.check_budget(start, total_input_tokens, total_output_token)
+                except httpx.HTTPStatusError as e:
+                    print(f"HTTP Error: {e.response.status_code} {e.response.reason_phrase} {self.agent_loop.model_name}")
+                    last_error = f"HTTPStatusError: {e.response.status_code}"
+                    consecutive_errors += 1
+                    self.check_budget(start, total_input_tokens, total_output_token)
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        raise ConsecutiveErrorsError(consecutive_errors, last_error)
                 except AgentLoopError:
                     raise
                 except KeyboardInterrupt:

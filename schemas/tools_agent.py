@@ -1,4 +1,11 @@
-from .llmclass import GeminiLLM, GroqLLM
+from .llmclass import GEMINI_API_URL, GROQ_API_URL, GeminiLLM, GroqLLM
+
+SYSTEM_PROMPT = """Tu résous des tâches de programmation en écrivant du Python.
+À chaque étape, écris un unique bloc de code Python dans une fence ```py.
+Utilise print() pour observer les valeurs intermédiaires.
+Les variables persistent d'une étape à l'autre.
+Quand tu as la réponse définitive, appelle final_answer(valeur).
+"""
 
 AUTHORIZED_GROQ = [
     "openai/gpt-oss-20b",

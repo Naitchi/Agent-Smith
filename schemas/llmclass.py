@@ -10,14 +10,12 @@ import time
 
 import httpx
 from dotenv import load_dotenv
-
 from .llm_result import LLMResult
 
 load_dotenv()
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-
 
 class GroqLLM:
     def __init__(self, model: str) -> None:
@@ -50,6 +48,7 @@ class GroqLLM:
         response.raise_for_status()
         latency_ms = (time.monotonic() - start) * 1000
         body = response.json()
+        print(body)
         usage = body.get("usage", {})
         return LLMResult(
             text=body["choices"][0]["message"]["extra_content"],
