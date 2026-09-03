@@ -1,5 +1,7 @@
+import argparse
 from contextlib import redirect_stderr, redirect_stdout
 from multiprocessing import Process, Queue
+import sys
 from mcp.server import MCPServer
 from pydantic import BaseModel
 from typing import IO, List
@@ -34,23 +36,27 @@ class ResultMBPPWorker(BaseModel):
 class MCPServerMBPP:
     def __init__(
         self,
-        task: MBPPTaskInput,
+        task: MBPPTaskInput | None = None,
         timeout: int = 30,
         max_std_length: int = 1500,
     ):
         self.task = task
         self.timeout_timer = timeout
         self.max_std_length = max_std_length
-        self.mcp = MCPServer()
+        self.mcp = MCPServer("MBPP-tools")
         self.register_tools()
 
     def register_tools(self):
         @self.mcp.tool()
-        def run_tests(
-            code: str, test_list: list[str] = self.task.test_list
-        ) -> str:
-            if self.task.test_imports:
-                code = self.task.test_imports + "\n" + code
+        def run_tests(code: str, test_list: list[str] | None = None) -> str:
+            if test_list is None and self.task and self.task.test_list:
+                test_list = self.task.test_list
+            if test_list is None or len(test_list) == 0:
+                return json.dumps(
+                    {"success": False, "output": "No tests to run."}
+                )
+            if self.task and self.task.test_imports:
+                code = "\n".join(self.task.test_imports) + "\n" + code
             try:
                 ast.parse(code)
             except SyntaxError as e:
@@ -112,6 +118,10 @@ class MCPServerMBPP:
                         result.error = test
                         result.error_type = "AssertionError"
                     except TimeoutError:
+                        result.error = (
+                            "execution timed out (possible infinite loop)"
+                        )
+                        result.error_type = "TimeoutError"
                         raise
                     except Exception as e:
                         result.error = str(e)
@@ -144,8 +154,8 @@ class MCPServerMBPP:
                 code,
                 test_list,
                 q,
-                temp_stderr,
                 temp_stdout,
+                temp_stderr,
             ),
         )
         result_worker: ResultMBPPWorker = ResultMBPPWorker()
@@ -156,25 +166,24 @@ class MCPServerMBPP:
             p.terminate()
             p.join(timeout=1)
             p.kill()
-            try:
-                result_worker = q.get(timeout=1)
-            except Empty:
-                stdout, stderr = self._get_stdout_stderr(
-                    temp_stdout, temp_stderr
-                )
-                temp_stderr.close()
-                temp_stdout.close()
-                result = ResultMBPPTests(
-                    success=False,
-                    output="Process timed out and was terminated.",
-                )
-                if stdout:
-                    result.output += f"\n---- stdout ----\n{stdout}\n"
-                if stderr:
-                    result.output += f"\n---- stderr ----\n{stderr}\n"
-                return result
-        else:
-            result_worker = q.get()
+        try:
+            result_worker = q.get(timeout=1)
+        except (TimeoutError, Empty):
+            stdout, stderr = self._get_stdout_stderr(temp_stdout, temp_stderr)
+            temp_stderr.close()
+            temp_stdout.close()
+            result = ResultMBPPTests(
+                success=False,
+                output=(
+                    "Process ended without producing a result (crash or"
+                    " timeout)"
+                ),
+            )
+            if stdout:
+                result.output += f"\n---- stdout ----\n{stdout}\n"
+            if stderr:
+                result.output += f"\n---- stderr ----\n{stderr}\n"
+            return result
         result_worker.stdout, result_worker.stderr = self._get_stdout_stderr(
             temp_stdout, temp_stderr
         )
@@ -209,5 +218,43 @@ class MCPServerMBPP:
 
 
 if __name__ == "__main__":
-    server = MCPServerMBPP()
-    server.mcp.run()
+    parser = argparse.ArgumentParser(prog="server-mbpp")
+    parser.add_argument(
+        "--task-file",
+        default=None,
+        help="Path to a JSON task file.",
+    )
+    parser.add_argument(
+        "--http",
+        default=False,
+        action="store_true",
+        help="Command to launch an MCP server with http.",
+    )
+    parser.add_argument(
+        "--host",
+        default="localhost",
+        help="host to bind the server to (default: localhost)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Config the port to bind the server to (default: 8080).",
+    )
+    args = parser.parse_args()
+
+    task = None
+    if args.task_file:
+        try:
+            with open(args.task_file) as f:
+                task_data = json.load(f)
+            task = MBPPTaskInput.model_validate(task_data)
+        except Exception as e:
+            print(f"Error loading task file: {e}", file=sys.stderr)
+            sys.exit(1)
+    server = MCPServerMBPP(task=task)
+
+    if args.http:
+        server.mcp.run("streamable-http", host=args.host, port=args.port)
+    else:
+        server.mcp.run()
