@@ -45,6 +45,21 @@ class MCPServerMBPP:
         self.max_std_length = max_std_length
         self.mcp = MCPServer("MBPP-tools")
         self.register_tools()
+        self.register_ressources()
+        self.register_prompt()
+
+    def register_prompt(self):
+        @self.mcp.prompt()
+        def prompt() -> str:
+            pass
+
+    def register_ressources(self):
+        @self.mcp.ressource("mbpp://task", mime_type="application/json")
+        def get_task() -> str:
+            if self.task:
+                return self.task.model_dump_json()
+            else:
+                return "{}"
 
     def register_tools(self):
         @self.mcp.tool()
