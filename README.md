@@ -33,3 +33,5 @@ resources:
 - [multiprocessing](https://docs.python.org/3/library/multiprocessing.html)
 - [pickle](https://docs.python.org/3/library/pickle.html)
 - [dill](https://pypi.org/project/dill/)
+
+# TODO bien dire que c'est un projet linux vu que le self._worker crash sur windows/MacOS ou fix (D:<)
