@@ -45,7 +45,7 @@ La seule chose que mobenais connaît de bclairot : `Sandbox.execute()`, `Sandbox
 
 ## 0.3 Setup commun
 
-- [ ] Repo git, branches `feat/agent` (mobenais) et `feat/sandbox` (bclairot)
+- [x] Repo git, branches `feat/agent` (mobenais) et `feat/sandbox` (bclairot)
 - [x] Python **3.10** exactement, `uv` comme gestionnaire de paquets
 - [x] `pyproject.toml` avec les entry points :
   - [x] `sandbox = "agent_smith.sandbox.cli:main"` → `uv run sandbox`
@@ -89,14 +89,13 @@ class SandboxProtocol(Protocol):
     def close(self) -> None: ...
 ```
 
-- [ ] Décider ensemble **comment le serveur MCP MBPP reçoit la tâche** (il a besoin
-      de `test_list` pour `run_tests`). Au choix :
-      `python mcp_tools_mbpp.py --task-file ../cache/mbpp_task.json`
-      ou variable d'env `MBPP_TASK_FILE`. **À figer maintenant**, mobenais lance le process.
+- [x] Décider ensemble **comment le serveur MCP MBPP reçoit la tâche** (il a besoin
+      de `test_list` pour `run_tests`). Retenu :
+      `python mcp_tools_mbpp.py --task-file ../cache/mbpp_task.json`. mobenais lance le process.
 - [ ] Même décision pour SWE-bench : comment le serveur reçoit `docker_image`,
       `eval_script`, `TESTBED_PATH` (env vars ou args CLI).
-- [ ] Décider qui construit l'objet `Sandbox` : mobenais dans son CLI, à partir des args
-      `--mcp-stdio` / `--mcp-server`.
+- [~] Décider qui construit l'objet `Sandbox` : mobenais dans son CLI, à partir des args
+      `--mcp-stdio` / `--mcp-server`. (CLI `sandbox` le construit ; args MCP parsés mais pas branchés)
 
 ## 0.6 Les deux mocks de démarrage
 
@@ -136,7 +135,7 @@ Pour ne pas s'attendre l'un l'autre :
 - [ ] Retry + backoff sur 429 / 5xx / timeout → comptés dans `retries` et `total_requests`
 - [ ] **`stop_sequences`** (`<end_code>`, `</tool_call>`…) → empêche le modèle d'halluciner l'observation
 - [ ] Usage tracking : tokens, retries, latence, nombre de requêtes
-- [ ] Free tiers uniquement, **aucune clé en dur** (grade 0 sinon)
+- [x] Free tiers uniquement, **aucune clé en dur** (grade 0 sinon)
 
 ## mobenais.2 Extraction de code
 
@@ -148,19 +147,19 @@ Pour ne pas s'attendre l'un l'autre :
 - [ ] `to_python_call(name, args) -> str` → `result = read_file(filepath="/testbed/file.py")`
 - [ ] Tolérance : bloc non fermé, ` ``` ` sans langage, texte parasite
 - [ ] Si interprétation « de secours » → le signaler pour que bclairot/le LLM le sache
-- [ ] `None` propre si rien d'exploitable → observation d'erreur explicite au LLM
+- [x] `None` propre si rien d'exploitable → observation d'erreur explicite au LLM
 
 ## mobenais.3 Boucle agent
 
-- [ ] `class AgentLoop`
-  - [ ] `__init__(llm, sandbox: SandboxProtocol, system_prompt, max_iterations)`
-  - [ ] `run(task) -> SolutionOutput`
-  - [ ] `_build_messages()` — historique Thought / Code / Observation
-  - [ ] `_record_step(...) -> StepMetrics`
-  - [ ] `_check_limits()` — itérations, tokens cumulés, temps mur
-- [ ] `max_iterations` **paramétrable**
-- [ ] Arrêt sur `result.final_answer is not None` OU limite atteinte
-- [ ] Aucun crash possible → `SolutionOutput(success=False, error=...)` écrit quand même
+- [x] `class AgentLoop`
+  - [x] `__init__(llm, sandbox: SandboxProtocol, system_prompt, max_iterations)` (via `AgentLoopConf`)
+  - [x] `run(task) -> SolutionOutput`
+  - [~] `_build_messages()` — historique Thought / Code / Observation (fait inline, pas de méthode dédiée)
+  - [x] `_record_step(...) -> StepMetrics` (construit inline dans la boucle)
+  - [x] `_check_limits()` — itérations, tokens cumulés, temps mur (`budget_exceeded`)
+- [x] `max_iterations` **paramétrable**
+- [x] Arrêt sur `result.final_answer is not None` OU limite atteinte
+- [x] Aucun crash possible → `SolutionOutput(success=False, error=...)` écrit quand même
 - [ ] Troncature / résumé des vieilles observations pour tenir le budget
 
 ## mobenais.4 System prompts (fortement noté)
@@ -200,46 +199,46 @@ Pour ne pas s'attendre l'un l'autre :
 
 ## bclairot.1 Sandbox — classe principale
 
-- [ ] `class Sandbox`
-  - [ ] `__init__(config: SandboxConfig, mcp_client: MCPClient | None = None)`
-  - [ ] `execute(code: str) -> ExecutionResult`
-  - [ ] `get_manual() -> str`
-  - [ ] `close()`
-- [ ] **Persistance des variables entre appels à `execute()`** (c'est l'intérêt du code-calling vs JSON tool calling)
-- [ ] `final_answer(answer)` injecté dans le namespace
-  - [ ] Implémentation typique : lève `_FinalAnswer(value)`, attrapée par `execute()`
-  - [ ] Toujours présent, indépendamment du serveur MCP connecté
+- [x] `class Sandbox`
+  - [~] `__init__(config: SandboxConfig, mcp_client: MCPClient | None = None)` (pas de param `mcp_client`)
+  - [x] `execute(code: str) -> ExecutionResult`
+  - [x] `get_manual() -> str`
+  - [x] `close()`
+- [x] **Persistance des variables entre appels à `execute()`** (c'est l'intérêt du code-calling vs JSON tool calling)
+- [x] `final_answer(answer)` injecté dans le namespace
+  - [x] Implémentation typique : lève `_FinalAnswer(value)`, attrapée par `execute()`
+  - [x] Toujours présent, indépendamment du serveur MCP connecté
   - [ ] MBPP : `final_answer(code)` — SWE-bench : `final_answer(get_patch())`
 
 ## bclairot.2 Sécurité — chaque point est testé par `exam_sandbox.sh` (tout-ou-rien)
 
-- [ ] **Imports** : allowlist stricte
-  - [ ] `guarded_import(name, globals, locals, fromlist, level)` remplaçant `__import__`
-  - [ ] Gérer les patterns `"math.*"`
-  - [ ] Bloquer les contournements : `importlib`, `__import__` direct
-- [ ] **Filesystem** : allowlist de répertoires
-  - [ ] `is_path_allowed(path, allowed) -> bool`
-  - [ ] ⚠️ **`os.path.realpath` avant comparaison** → sinon `/testbed/../etc/passwd` passe
-  - [ ] Wrapper sur `open()`, plus `os.open`, `pathlib.Path.open`, `shutil`
-  - [ ] Plusieurs entrées (`/testbed` + `/tmp/agent`), évaluées **dans** la sandbox
-- [ ] **Réseau** : neutraliser `socket.socket`, `socket.create_connection`
-- [ ] **Timeout** : tuer au-delà de `max_execution_time_seconds` (code sandboxé uniquement)
-- [ ] **Mémoire** : `resource.setrlimit(RLIMIT_AS, max_memory_mb * 1024 * 1024)`
-- [ ] **Builtins restreints** : `build_safe_builtins(config) -> dict`
-  - [ ] Retirer/écraser `eval`, `exec`, `compile`, `open`, `__import__`, `input`, `breakpoint`, `globals`, `help`
-  - [ ] Bloquer l'évasion par attributs : `().__class__.__bases__[0].__subclasses__()`
-- [ ] **Propagation** : `KeyboardInterrupt` et `SystemExit` jamais avalés
+- [x] **Imports** : allowlist stricte
+  - [x] `guarded_import(name, globals, locals, fromlist, level)` remplaçant `__import__` (`_restricted_import`)
+  - [x] Gérer les patterns `"math.*"`
+  - [x] Bloquer les contournements : `importlib`, `__import__` direct
+- [~] **Filesystem** : allowlist de répertoires
+  - [x] `is_path_allowed(path, allowed) -> bool` (inline dans `_restricted_open`)
+  - [x] ⚠️ **`os.path.realpath` avant comparaison** → sinon `/testbed/../etc/passwd` passe
+  - [ ] Wrapper sur `open()`, plus `os.open`, `pathlib.Path.open`, `shutil` (seul `open` est wrappé)
+  - [x] Plusieurs entrées (`/testbed` + `/tmp/agent`), évaluées **dans** la sandbox
+- [~] **Réseau** : neutraliser `socket.socket`, `socket.create_connection` (`socket.socket` seulement)
+- [x] **Timeout** : tuer au-delà de `max_execution_time_seconds` (code sandboxé uniquement)
+- [x] **Mémoire** : `resource.setrlimit(RLIMIT_AS, max_memory_mb * 1024 * 1024)`
+- [x] **Builtins restreints** : `build_safe_builtins(config) -> dict` (allowlist dans `_make_initial_namespace`)
+  - [x] Retirer/écraser `eval`, `exec`, `compile`, `open`, `__import__`, `input`, `breakpoint`, `globals`, `help`
+  - [x] Bloquer l'évasion par attributs : `().__class__.__bases__[0].__subclasses__()`
+- [x] **Propagation** : `KeyboardInterrupt` et `SystemExit` jamais avalés
   ```python
   except (KeyboardInterrupt, SystemExit):
       raise
   except Exception as e:
       ...
   ```
-- [ ] **Sécurité en stdlib pure** — `RestrictedPython` et équivalents interdits
+- [x] **Sécurité en stdlib pure** — `RestrictedPython` et équivalents interdits
 
 ## bclairot.3 Choix d'isolation (à défendre en soutenance)
 
-- [ ] Trancher : `exec()` in-process vs `subprocess` / `multiprocessing`
+- [x] Trancher : `exec()` in-process vs `subprocess` / `multiprocessing` → **`multiprocessing.Process` + `dill` pour l'état**
   - in-process : simple, mais timeout dur et RLIMIT difficiles à appliquer proprement
   - process séparé : vraie frontière, timeout par `kill`, mais il faut sérialiser l'état
 - [ ] Documenter le trade-off dans le README
@@ -258,22 +257,22 @@ Le champ `error` de `ExecutionResult` doit couvrir :
 
 ## bclairot.5 CLI sandbox (REPL)
 
-- [ ] `uv run sandbox` → REPL interactif
-- [ ] `uv run sandbox sandbox_template.json`
-- [ ] `uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py" sandbox_template.json`
-- [ ] `uv run sandbox --mcp-server <URL>`
-- [ ] Comportement :
-  - [ ] Boucle prompt → lecture → exécution dans le **même namespace**
-  - [ ] Toutes les restrictions actives (imports, FS, timeout, RAM)
-  - [ ] Affiche résultat ou erreur levée
-  - [ ] Sortie propre sur `exit` **et** sur EOF (Ctrl+D)
+- [x] `uv run sandbox` → REPL interactif
+- [x] `uv run sandbox sandbox_template.json`
+- [~] `uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py" sandbox_template.json` (arg parsé mais pas branché, pas de client MCP)
+- [~] `uv run sandbox --mcp-server <URL>` (idem, arg parsé mais inutilisé)
+- [x] Comportement :
+  - [x] Boucle prompt → lecture → exécution dans le **même namespace**
+  - [x] Toutes les restrictions actives (imports, FS, timeout, RAM)
+  - [x] Affiche résultat ou erreur levée
+  - [x] Sortie propre sur `exit` **et** sur EOF (Ctrl+D)
 
 ## bclairot.6 Génération du manuel
 
-- [ ] `build_manual(tools: list[ToolSchema], config: SandboxConfig) -> str`
+- [~] `build_manual(tools: list[ToolSchema], config: SandboxConfig) -> str` (`get_manual()` existe mais 100 % statique, ne prend pas les tools)
   - [ ] Nom, description, types de paramètres de chaque outil MCP
-  - [ ] `final_answer` documenté à part (ce n'est pas un outil MCP)
-  - [ ] Rappel des imports autorisés et des répertoires accessibles
+  - [~] `final_answer` documenté à part (ce n'est pas un outil MCP) (mentionné dans le texte figé)
+  - [x] Rappel des imports autorisés et des répertoires accessibles
 - [ ] **Test** : connecter un autre serveur MCP → le manuel change tout seul
 
 ## bclairot.7 Client MCP
@@ -292,9 +291,9 @@ Le champ `error` de `ExecutionResult` doit couvrir :
 
 ## bclairot.8 `mcp_tools_mbpp.py`
 
-- [ ] `run_tests(code: str) -> str` — exécute les tests de la tâche contre le code
-- [ ] Réception de la tâche selon la convention figée en §0.5
-- [ ] Outils additionnels libres (ex. `lint(code)`)
+- [x] `run_tests(code: str) -> str` — exécute les tests de la tâche contre le code
+- [x] Réception de la tâche selon la convention figée en §0.5
+- [x] Outils additionnels libres (ex. `lint(code)`)
 
 ## bclairot.9 `mcp_tools_swebench.py` — les 9 outils obligatoires
 
