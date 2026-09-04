@@ -15,10 +15,7 @@ class MCPClient:
         self.port = port
         self.host = host
         self.server_path = server_path
-        self.client = None
-
-    def connect(self):
-        params: Any = None
+        params: Optional[Any] = None
         if (self.host is None or self.port is None) and self.server_path:
             server = StdioServerParameters(
                 command="python", args=[self.server_path]
@@ -31,6 +28,9 @@ class MCPClient:
                 "Either host and port or server_path must be provided."
             )
         self.client = Client(params)
+
+    def connect(self):
+        pass
 
     def get_tools_list(self):
         pass
