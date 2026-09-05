@@ -1,14 +1,12 @@
-from typing import Any, Dict, Optional
-
 from mcp import Client, StdioServerParameters, stdio_client
+from typing import Any, Dict, Optional
 
 
 class MCPClient:
-
     def __init__(
         self,
-        url: Optional[str],
         server_path: Optional[str] = "./mcp_tools_mbpp.py",
+        url: Optional[str] = None,
     ) -> None:
         self.url = url
         self.server_path = server_path
