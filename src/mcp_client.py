@@ -1,36 +1,55 @@
 from typing import Any, Optional
 
 from mcp import Client, StdioServerParameters, stdio_client
-import asyncio
 
 
 class MCPClient:
 
     def __init__(
         self,
-        host: Optional[str],
-        port: Optional[int],
+        url: Optional[str],
         server_path: Optional[str] = "./mcp_tools_mbpp.py",
     ) -> None:
-        self.port = port
-        self.host = host
+        self.url = url
         self.server_path = server_path
-        params: Optional[Any] = None
-        if (self.host is None or self.port is None) and self.server_path:
-            server = StdioServerParameters(
-                command="python", args=[self.server_path]
-            )
-            params = stdio_client(server)
-        elif self.host and self.port:
-            params = f"http://{self.host}:{self.port}/mcp"
-        else:
-            raise ValueError(
-                "Either host and port or server_path must be provided."
-            )
-        self.client = Client(params)
+        self.client: Optional[Client] = self.build_client()
+        self.connected = False
 
-    def connect(self):
-        pass
+    def build_client(self):
+        try:
+            params: Optional[Any] = None
+            if (self.url is None) and self.server_path:
+                server = StdioServerParameters(
+                    command="python", args=[self.server_path]
+                )
+                params = stdio_client(server)
+            elif self.url:
+                params = self.url
+            else:
+                raise ValueError(
+                    "Either host and port or server_path must be provided."
+                )
+        except ValueError as e:
+            print(f"Error building client: {e}")
+            return None
+        return Client(params)
+
+    async def connect(self):
+        if not self.client:
+            print("No client to disconnect.")
+            return
+        try:
+            if self.connected:
+                raise RuntimeError("Already connected to the MCP server.")
+            await self.client.__aenter__()
+            self.connected = True
+            if self.client.server_info:
+                print(f"Connected to MCP server: {self.client.server_info}")
+            else:
+                print("Connected to MCP server, but no server info available.")
+        except Exception as e:
+            print(f"Failed to connect to the MCP server: {e}")
+            raise
 
     def get_tools_list(self):
         pass
@@ -47,5 +66,17 @@ class MCPClient:
     def get_prompt(self):
         pass
 
-    def disconnect(self):
-        pass
+    async def disconnect(self):
+        if not self.client:
+            print("No client to disconnect.")
+            return
+        try:
+            if not self.connected:
+                raise RuntimeError("Already disconnected from the MCP server.")
+            await self.client.__aexit__(None, None, None)
+            print("Disconnected from MCP server.")
+            self.connected = False
+            self.client = self.build_client()
+        except Exception as e:
+            print(f"Failed to disconnect from the MCP server: {e}")
+            raise
