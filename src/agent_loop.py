@@ -1,11 +1,26 @@
 from  __future__ import annotations
-import time, json, os, shutil
+import time, json, os, shutil, random
 from pathlib import Path
-from schemas import (AgentLoopConf,
+import httpx
+from schemas import (AUTHORIZED_GEMINI,
+                     AUTHORIZED_GROQ,
+                     GEMINI_API_URL,
+                     GROQ_API_URL,
+                     AgentLoopConf,
+                     AgentLoopError,
+                     GeminiLLM,
+                     GroqLLM,
+                     ConsecutiveErrorsError,
+                     MaxInputTokensError,
+                     MaxIterationsError,
+                     MaxOutputTokensError,
+                     MaxWallTimeError,
                      OutputParameter,
+                     SigStopError,
                      SolutionOutput,
-                     StepMetrics)
-from .agent.parsing import extract_code
+                     StepMetrics,
+                     extract_code,
+                     )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -14,7 +29,7 @@ BACKUP_FILE = BACKUP_DIR / "backup.json"
 MAX_CONSECUTIVE_ERRORS = 3
 
 
-def backup_json(total_input_tokens: int, total_output_token: int, total_request: int):
+def backup_json(total_input_tokens: int, total_output_token: int, total_request: int, current_context: str):
     try:
         os.mkdir(BACKUP_DIR)
     except FileExistsError:
@@ -26,6 +41,7 @@ def backup_json(total_input_tokens: int, total_output_token: int, total_request:
                 "total_input_tokens": total_input_tokens,
                 "total_output_token": total_output_token,
                 "total_request": total_request,
+                "current_context": current_context
             },
             f,
             indent=2,
@@ -50,7 +66,7 @@ def init_value() -> tuple[int, int, int]:
 class AgentLoop:
     def __init__(
         self,
-        agent_loop_conf: AgentLoopConf
+        agent_loop_conf: AgentLoopConf | None
         ) -> None:
         self.agent_loop = agent_loop_conf
 
@@ -70,135 +86,208 @@ class AgentLoop:
 
         steps: list[StepMetrics] = []
         total_input_tokens, total_output_token, total_request = init_value()
-        error: str | None = None
         last_error: str | None = None
         consecutive_errors = 0
-        for step in range(1, self.agent_loop.max_iterations + 1):
-            try:
-                request_start = time.monotonic()
-                result = self.agent_loop.llm(self.agent_loop.system_prompt, message)
-                request_conv_time = (time.monotonic() - request_start) * 1000
 
-                total_request += 1
-                total_input_tokens += result.input_tokens
-                total_output_token += result.output_tokens
-                message.append(
-                    {
-                        "role": "assistant",
-                        "content": result.text
-                    }
-                )
-                code = extract_code(result.text)
-                final_answer: str | None = None
-                if code is None:
-                    sandbox_input = ""
-                    sandbox_output = "No valid code block was found in the model's response."
-                else:
-                    sandbox_input = code
-                    exec_res = self.agent_loop.sandbox.execute(code)
-                    if exec_res.final_answer is not None:
-                        final_answer = exec_res.final_answer
-                        sandbox_output = exec_res.stdout or ""
-                    elif exec_res.error:
-                        sandbox_output = f"error: {exec_res.error}"
+        current_context = ""
+        gemini_pool = list(AUTHORIZED_GEMINI)
+        groq_pool = list(AUTHORIZED_GROQ)
+        exhausted: list[str] = []
+        if self.agent_loop.model_name in gemini_pool:
+            gemini_pool.remove(self.agent_loop.model_name)
+        elif self.agent_loop.model_name in groq_pool:
+            groq_pool.remove(self.agent_loop.model_name)
+
+        gemini_keys = [k.strip() for k in os.environ.get(
+            "GEMINI_API_KEYS", os.environ.get("GEMINI_API_KEY", "")).split(",") if k.strip()]
+        groq_keys = [k.strip() for k in os.environ.get(
+            "GROQ_API_KEYS", os.environ.get("GROQ_API_KEY", "")).split(",") if k.strip()]
+        key_index = 0
+        if gemini_keys:
+            os.environ["GEMINI_API_KEY"] = gemini_keys[0]
+        if groq_keys:
+            os.environ["GROQ_API_KEY"] = groq_keys[0]
+        try:
+            for step in range(1, self.agent_loop.max_iterations + 1):
+                try:
+                    retries = 0
+                    while True:
+                        try:
+                            request_start = time.monotonic()
+                            total_request += 1
+                            result = self.agent_loop.llm(self.agent_loop.system_prompt, message)
+                            current_context += result.text
+                            request_conv_time = (time.monotonic() - request_start) * 1000
+                            break
+                        except httpx.HTTPStatusError as e:
+                            if e.response.status_code != 429:
+                                raise
+                            retries += 1
+                            on_gemini = self.agent_loop.api_url == GEMINI_API_URL
+                            keys = gemini_keys if on_gemini else groq_keys
+                            key_var = "GEMINI_API_KEY" if on_gemini else "GROQ_API_KEY"
+                            if key_index + 1 < len(keys):
+                                key_index += 1
+                                os.environ[key_var] = keys[key_index]
+                                print(
+                                    f"429 rate limit -> token {key_index + 1}/{len(keys)} "
+                                    f"sur {self.agent_loop.model_name}"
+                                )
+                                continue
+                            key_index = 0
+                            if keys:
+                                os.environ[key_var] = keys[0]
+
+                            exhausted.append(self.agent_loop.model_name)
+                            if self.agent_loop.model_name in gemini_pool:
+                                gemini_pool.remove(self.agent_loop.model_name)
+                            elif self.agent_loop.model_name in groq_pool:
+                                groq_pool.remove(self.agent_loop.model_name)
+
+
+                            if gemini_pool:
+                                self.agent_loop.model_name = random.choice(gemini_pool)
+                                self.agent_loop.api_url = GEMINI_API_URL
+                                self.agent_loop.llm = GeminiLLM(self.agent_loop.model_name)
+                            elif groq_pool:
+                                self.agent_loop.model_name = random.choice(groq_pool)
+                                self.agent_loop.api_url = GROQ_API_URL
+                                self.agent_loop.llm = GroqLLM(self.agent_loop.model_name)
+                                if groq_keys:
+                                    os.environ["GROQ_API_KEY"] = groq_keys[0]
+                            else:
+                                raise AgentLoopError(
+                                    f"plus aucun modele disponible, "
+                                    f"{len(exhausted)}  rate limit -> "
+                                    f"{', '.join(exhausted)}"
+                                )
+                            print(
+                                f"429 rate limit -> bascule sur {self.agent_loop.model_name} "
+                                f"({self.agent_loop.api_url})"
+                            )
+
+                    total_input_tokens += result.input_tokens
+                    total_output_token += result.output_tokens
+                    message.append(
+                        {
+                            "role": "assistant",
+                            "content": result.text
+                        }
+                    )
+                    code = extract_code(result.text)
+                    final_answer: str | None = None
+                    if code is None:
+                        sandbox_input = ""
+                        sandbox_output = "No valid code block was found in the model's response."
                     else:
-                        sandbox_output = exec_res.stdout or "nothing bro"
-                message.append(
-                    {
-                        "role": "user",
-                        "content": f"observation\n{sandbox_output}"
-                    }
+                        sandbox_input = code
+                        exec_res = self.agent_loop.sandbox.execute(code)
+                        if exec_res.final_answer is not None:
+                            final_answer = exec_res.final_answer
+                            sandbox_output = exec_res.stdout or ""
+                        elif exec_res.error:
+                            sandbox_output = f"error: {exec_res.error}"
+                        else:
+                            sandbox_output = exec_res.stdout or "nothing bro"
+                    message.append(
+                        {
+                            "role": "user",
+                            "content": f"observation\n{sandbox_output}"
+                        }
+                    )
+
+                    steps.append(
+                        StepMetrics(
+                            step=step,
+                            input_tokens=result.input_tokens,
+                            output_tokens=result.output_tokens,
+                            request_time_ms=request_conv_time,
+                            api_url=self.agent_loop.api_url,
+                            model_name=self.agent_loop.model_name,
+                            llm_output=result.text,
+                            sandbox_input=sandbox_input,
+                            sandbox_output=sandbox_output,
+                            retries=retries
+                            )
+                        )
+                    if final_answer is not None:
+                        clear_backup()
+                        return self.__output__(
+                            OutputParameter(
+                                task_id,
+                                benchmark,
+                                True,
+                                final_answer,
+                                step,
+                                total_request,
+                                total_input_tokens,
+                                total_output_token,
+                                start,
+                                steps,
+                                None
+                            )
+                        )
+                    consecutive_errors = 0
+                    self.check_budget(start, total_input_tokens, total_output_token)
+                except httpx.HTTPStatusError as e:
+                    print(f"HTTP Error: {e.response.status_code} {e.response.reason_phrase} {self.agent_loop.model_name}")
+                    last_error = f"HTTPStatusError: {e.response.status_code}"
+                    consecutive_errors += 1
+                    self.check_budget(start, total_input_tokens, total_output_token)
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        raise ConsecutiveErrorsError(consecutive_errors, last_error)
+                except AgentLoopError:
+                    raise
+                except KeyboardInterrupt:
+                    backup_json(total_input_tokens, total_output_token, total_request, current_context)
+                    raise SigStopError("CTRL+C detected, stopping the agent loop.")
+                except Exception as e:
+                    backup_json(total_input_tokens, total_output_token, total_request, current_context)
+                    print(f"Error: {e}")
+                    last_error = f"{type(e).__name__}: {e}"
+                    consecutive_errors += 1
+
+                    self.check_budget(start, total_input_tokens, total_output_token)
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        raise ConsecutiveErrorsError(consecutive_errors, last_error)
+            raise MaxIterationsError(self.agent_loop.max_iterations, last_error)
+        except SigStopError:
+            raise 
+        except AgentLoopError as e:
+            return self.__output__(
+                OutputParameter(
+                    task_id,
+                    benchmark,
+                    False,
+                    "",
+                    len(steps),
+                    total_request,
+                    total_input_tokens,
+                    total_output_token,
+                    start,
+                    steps,
+                    str(e)
                 )
-
-                steps.append(
-                    StepMetrics(
-                        step=step,
-                        input_tokens=result.input_tokens,
-                        output_tokens=result.output_tokens,
-                        request_time_ms=request_conv_time,
-                        api_url=self.agent_loop.api_url,
-                        model_name=self.agent_loop.model_name,
-                        llm_output=result.text,
-                        sandbox_input=sandbox_input,
-                        sandbox_output=sandbox_output,
-                        retries=0
-                        )
-                    )
-                if final_answer is not None:
-                    clear_backup()
-                    return self.__output__(
-                        OutputParameter(
-                            task_id,
-                            benchmark,
-                            True,
-                            final_answer,
-                            step,
-                            total_request,
-                            total_input_tokens,
-                            total_output_token,
-                            start,
-                            steps,
-                            None
-                        )
-                    )
-                consecutive_errors = 0
-                error = self.budget_exceeded(start, total_input_tokens, total_output_token)
-                if error is not None:
-                    break
-            except KeyboardInterrupt:
-                backup_json(total_input_tokens, total_output_token, total_request)
-                raise
-            except Exception as e:
-                backup_json(total_input_tokens, total_output_token, total_request)
-                print(f"Error: {e}")
-                last_error = f"{type(e).__name__}: {e}"
-                consecutive_errors += 1
-
-                error = self.budget_exceeded(start, total_input_tokens, total_output_token)
-                if error is not None:
-                    break
-                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                    error = (
-                        f"{MAX_CONSECUTIVE_ERRORS} erreurs consecutives, "
-                        f"derniere -> {last_error}"
-                    )
-                    break
-        final_error = (
-            error or last_error or "max_iterations reached without final_answer"
-        )
-        return self.__output__(
-            OutputParameter(
-                task_id,
-                benchmark,
-                False,
-                "",
-                len(steps),
-                total_request,
-                total_input_tokens,
-                total_output_token,
-                start,
-                steps,
-                final_error
             )
-        )
 
-    def budget_exceeded(
+    def check_budget(
             self, 
             start: float, 
             total_input_tokens: int, 
-            total_output_token: int) -> str | None:
+            total_output_token: int) -> None:
+        """Leve une `BudgetExceededError` si une des limites est atteinte."""
         if (self.agent_loop.max_input_tokens is not None
             and total_input_tokens >= self.agent_loop.max_input_tokens):
-            return "max_input_tokens exceeded"
+            raise MaxInputTokensError(total_input_tokens, self.agent_loop.max_input_tokens)
         if (self.agent_loop.max_output_tokens is not None
             and total_output_token >= self.agent_loop.max_output_tokens):
-            return "max_output_tokens exceeded"
+            raise MaxOutputTokensError(total_output_token, self.agent_loop.max_output_tokens)
+        elapsed = time.monotonic() - start
         if (
              self.agent_loop.max_wall_time_seconds is not None
-             and (time.monotonic() - start) >= self.agent_loop.max_wall_time_seconds
+             and elapsed >= self.agent_loop.max_wall_time_seconds
              ):
-             return "max_wall_time_seconds exceeded"
-        return None
+             raise MaxWallTimeError(elapsed, self.agent_loop.max_wall_time_seconds)
 
     def __output__(
         self,

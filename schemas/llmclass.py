@@ -4,19 +4,15 @@ Each provider class stores its model once at construction time and is
 callable as `llm(system, messages) -> LLMResult`, which is the shape
 `AgentLoop` expects.
 """
-
+from .tools_agent import GEMINI_API_URL, GROQ_API_URL
 import os
 import time
 
 import httpx
 from dotenv import load_dotenv
-
-from schemas import LLMResult
+from .llm_result import LLMResult
 
 load_dotenv()
-
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
 
 class GroqLLM:
@@ -50,9 +46,10 @@ class GroqLLM:
         response.raise_for_status()
         latency_ms = (time.monotonic() - start) * 1000
         body = response.json()
+        print(body)
         usage = body.get("usage", {})
         return LLMResult(
-            text=body["choices"][0]["message"]["extra_content"],
+            text=body["choices"][0]["message"].get("content") or "",
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
             latency_ms=latency_ms,
@@ -91,7 +88,7 @@ class GeminiLLM:
         body = response.json()
         usage = body.get("usage", {})
         return LLMResult(
-            text=body["choices"][0]["message"]["content"],
+            text=body["choices"][0]["message"].get("content") or "",
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
             latency_ms=latency_ms,
