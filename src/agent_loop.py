@@ -117,9 +117,6 @@ class AgentLoop:
                             total_request += 1
                             result = self.agent_loop.llm(self.agent_loop.system_prompt, message)
                             current_context += result.text
-                            # print("------------------TEST-CONTEXT----------------------------")
-                            # print(current_context)
-                            # print("------------------TEST-CONTEXT----------------------------")
                             request_conv_time = (time.monotonic() - request_start) * 1000
                             break
                         except httpx.HTTPStatusError as e:
@@ -243,10 +240,10 @@ class AgentLoop:
                     raise
                 except KeyboardInterrupt:
                     backup_json(total_input_tokens, total_output_token, total_request, current_context)
-                    raise SigStopError("you have to kill yourself")
+                    raise SigStopError("CTRL+C detected, stopping the agent loop.")
                 except Exception as e:
                     backup_json(total_input_tokens, total_output_token, total_request, current_context)
-                    print(f"Error: aaaaaaaaaaaaaaaa {e}")
+                    print(f"Error: {e}")
                     last_error = f"{type(e).__name__}: {e}"
                     consecutive_errors += 1
 
@@ -272,8 +269,6 @@ class AgentLoop:
                     str(e)
                 )
             )
-        # finally:
-        #     backup_json(total_input_tokens, total_output_token, total_request, current_context)
 
     def check_budget(
             self, 

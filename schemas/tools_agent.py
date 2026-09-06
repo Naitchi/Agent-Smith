@@ -1,5 +1,3 @@
-# from .llmclass import GEMINI_API_URL, GROQ_API_URL, GeminiLLM, GroqLLM
-
 SYSTEM_PROMPT = """Tu résous des tâches de programmation en écrivant du Python.
 À chaque étape, écris un unique bloc de code Python dans une fence ```py.
 Utilise print() pour observer les valeurs intermédiaires.
@@ -54,17 +52,3 @@ def extract_code(text: str) -> str | None:
 
     return block.strip()
 
-
-# def check_llm(llm: GroqLLM | GeminiLLM, model: str):
-#     if model not in AUTHORIZED_LLM:
-#         raise ValueError(f"'{model}' is not an authorized model. Check AUTHORIZED_LLM for the allowed list.")
-
-#     if model in AUTHORIZED_GROQ:
-#         expected_provider = GroqLLM
-#     else:
-#         expected_provider = GeminiLLM
-
-#     if not isinstance(llm, expected_provider):
-#         raise ValueError(
-#             f"'{model}' belongs to {expected_provider.__name__}, but the llm passed in is a {type(llm).__name__}."
-#         )
