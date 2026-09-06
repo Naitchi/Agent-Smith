@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout, redirect_stderr
-import json
+import threading
 from typing import Any, Callable, Dict, IO, Optional
 from multiprocessing import Process, Queue
 from types import FrameType
@@ -13,24 +13,32 @@ import argparse
 import signal
 import socket
 import types
+import json
 import dill
 import time
 import ast
 import sys
 import os
 
+from schemas.contract_model import SandboxProtocol
+from src.mcp_client import MCPClient
 from schemas import ExecutionResult
 from schemas import SandboxConfig
-from schemas.contract_model import SandboxProtocol
 
 
-class Sandbox:
+class Sandbox(SandboxProtocol):
     class _FinalAnswer(Exception):
         def __init__(self, value: Any) -> None:
             self.value = value
 
-    def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
+    def __init__(
+        self,
+        stdio: Optional[bool] = None,
+        url: Optional[str] = None,
+        config: SandboxConfig = SandboxConfig(),
+    ) -> None:
         self.config = config
+        self.mcp_client: Optional[MCPClient] = MCPClient(stdio=stdio, url=url)
         self._namespace: Dict[str, Any] = self._make_initial_namespace()
         self._namespace_save: Optional[bytes] = None
 
@@ -325,10 +333,22 @@ def main() -> None:
         except Exception as e:
             print(f"Error loading config: {e}", file=sys.stderr)
             return
-        sandbox = Sandbox(config)
+        sandbox = Sandbox(
+            config=config, stdio=args.mcp_stdio, url=args.mcp_server
+        )
     else:
-        sandbox = Sandbox()
+        sandbox = Sandbox(stdio=args.mcp_stdio, url=args.mcp_server)
     try:
+        if args.mcp_stdio or args.mcp_server:
+            print("Connecting to MCP server...")
+            threading.Thread(
+                target=sandbox.mcp_client.connect, daemon=True
+            ).start()
+        else:
+            print(
+                "No MCP server specified. No MCP"
+                " connection will be established."
+            )
         # TODO voir pour tester avec du code avec des fonctions de plusieurs
         # lignes avec codeop ? ou code.InteractiveConsole ?
         print(
