@@ -29,7 +29,7 @@ BACKUP_FILE = BACKUP_DIR / "backup.json"
 MAX_CONSECUTIVE_ERRORS = 3
 
 
-def backup_json(total_input_tokens: int, total_output_token: int, total_request: int):
+def backup_json(total_input_tokens: int, total_output_token: int, total_request: int, current_context: str):
     try:
         os.mkdir(BACKUP_DIR)
     except FileExistsError:
@@ -41,6 +41,7 @@ def backup_json(total_input_tokens: int, total_output_token: int, total_request:
                 "total_input_tokens": total_input_tokens,
                 "total_output_token": total_output_token,
                 "total_request": total_request,
+                "current_context": current_context
             },
             f,
             indent=2,
@@ -88,7 +89,7 @@ class AgentLoop:
         last_error: str | None = None
         consecutive_errors = 0
 
-
+        current_context = ""
         gemini_pool = list(AUTHORIZED_GEMINI)
         groq_pool = list(AUTHORIZED_GROQ)
         exhausted: list[str] = []
@@ -115,6 +116,10 @@ class AgentLoop:
                             request_start = time.monotonic()
                             total_request += 1
                             result = self.agent_loop.llm(self.agent_loop.system_prompt, message)
+                            current_context += result.text
+                            # print("------------------TEST-CONTEXT----------------------------")
+                            # print(current_context)
+                            # print("------------------TEST-CONTEXT----------------------------")
                             request_conv_time = (time.monotonic() - request_start) * 1000
                             break
                         except httpx.HTTPStatusError as e:
@@ -156,7 +161,7 @@ class AgentLoop:
                             else:
                                 raise AgentLoopError(
                                     f"plus aucun modele disponible, "
-                                    f"{len(exhausted)} epuises par rate limit -> "
+                                    f"{len(exhausted)}  rate limit -> "
                                     f"{', '.join(exhausted)}"
                                 )
                             print(
@@ -237,11 +242,11 @@ class AgentLoop:
                 except AgentLoopError:
                     raise
                 except KeyboardInterrupt:
-                    backup_json(total_input_tokens, total_output_token, total_request)
+                    backup_json(total_input_tokens, total_output_token, total_request, current_context)
                     raise SigStopError("you have to kill yourself")
                 except Exception as e:
-                    backup_json(total_input_tokens, total_output_token, total_request)
-                    print(f"Error: {e}")
+                    backup_json(total_input_tokens, total_output_token, total_request, current_context)
+                    print(f"Error: aaaaaaaaaaaaaaaa {e}")
                     last_error = f"{type(e).__name__}: {e}"
                     consecutive_errors += 1
 
@@ -267,6 +272,8 @@ class AgentLoop:
                     str(e)
                 )
             )
+        # finally:
+        #     backup_json(total_input_tokens, total_output_token, total_request, current_context)
 
     def check_budget(
             self, 

@@ -1,11 +1,15 @@
-from .llmclass import GEMINI_API_URL, GROQ_API_URL, GeminiLLM, GroqLLM
+# from .llmclass import GEMINI_API_URL, GROQ_API_URL, GeminiLLM, GroqLLM
 
 SYSTEM_PROMPT = """Tu résous des tâches de programmation en écrivant du Python.
 À chaque étape, écris un unique bloc de code Python dans une fence ```py.
 Utilise print() pour observer les valeurs intermédiaires.
 Les variables persistent d'une étape à l'autre.
-Quand tu as la réponse définitive, appelle final_answer(valeur).
+Quand tu as la réponse définitive, appelle final_answer(valeur) toute tres reponse doivent etre en anglais.
 """
+
+
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
 AUTHORIZED_GROQ = [
     "openai/gpt-oss-20b",
@@ -28,6 +32,11 @@ AUTHORIZED_GEMINI = [
 
 AUTHORIZED_LLM = AUTHORIZED_GROQ + AUTHORIZED_GEMINI
 
+def create_newcontext(current_context: str, original_prompt: str) -> str:
+    return (f"You the  next one llm that i use the original prompt is '{original_prompt}'\
+            can you complete that reponse from previous llm :{current_context}. \
+                take his behaviour and don't add parasite words")
+
 
 
 def extract_code(text: str) -> str | None:
@@ -37,19 +46,25 @@ def extract_code(text: str) -> str | None:
     if len(parts) < 3:
         return None
 
-    return parts[-2].strip()
+    block = parts[-2]
+
+    first, sep, rest = block.partition("\n")
+    if sep and first.strip().lower() in ("python", "py", "python3"):
+        block = rest
+
+    return block.strip()
 
 
-def check_llm(llm: GroqLLM | GeminiLLM, model: str):
-    if model not in AUTHORIZED_LLM:
-        raise ValueError(f"'{model}' is not an authorized model. Check AUTHORIZED_LLM for the allowed list.")
+# def check_llm(llm: GroqLLM | GeminiLLM, model: str):
+#     if model not in AUTHORIZED_LLM:
+#         raise ValueError(f"'{model}' is not an authorized model. Check AUTHORIZED_LLM for the allowed list.")
 
-    if model in AUTHORIZED_GROQ:
-        expected_provider = GroqLLM
-    else:
-        expected_provider = GeminiLLM
+#     if model in AUTHORIZED_GROQ:
+#         expected_provider = GroqLLM
+#     else:
+#         expected_provider = GeminiLLM
 
-    if not isinstance(llm, expected_provider):
-        raise ValueError(
-            f"'{model}' belongs to {expected_provider.__name__}, but the llm passed in is a {type(llm).__name__}."
-        )
+#     if not isinstance(llm, expected_provider):
+#         raise ValueError(
+#             f"'{model}' belongs to {expected_provider.__name__}, but the llm passed in is a {type(llm).__name__}."
+#         )
