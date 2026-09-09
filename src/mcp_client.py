@@ -25,33 +25,23 @@ class MCPClient:
     ) -> None:
         self.url = url
         self.server_path = server_path
-        self.client: Optional[Client] = self.build_client()
+        self.client: Client = self.build_client()
         self.connected = False
 
-    def build_client(self) -> Optional[Client]:
-        try:
-            params: Optional[Any] = None
-            if (self.url is None) and self.server_path:
-                server = StdioServerParameters(
-                    command="python", args=[self.server_path]
-                )
-                params = stdio_client(server)
-            elif self.url:
-                params = self.url
-            else:
-                raise ValueError("Either url or server_path must be provided.")
-        except ValueError as e:
-            print(f"Error building client: {e}", file=sys.stderr)
-            return None
-        except Exception as e:
-            print(f"Unexpected error: {e}", file=sys.stderr)
-            return None
+    def build_client(self) -> Client:
+        params: Optional[Any] = None
+        if (self.url is None) and self.server_path:
+            server = StdioServerParameters(
+                command="python", args=[self.server_path]
+            )
+            params = stdio_client(server)
+        elif self.url:
+            params = self.url
+        else:
+            raise ValueError("Either url or server_path must be provided.")
         return Client(params)
 
     async def connect(self):
-        if not self.client:
-            print("No client to connect.", file=sys.stderr)
-            return
         try:
             if self.connected:
                 raise RuntimeError("Already connected to the MCP server.")
@@ -72,8 +62,6 @@ class MCPClient:
             raise
 
     def _require_client(self) -> Client:
-        if self.client is None:
-            raise RuntimeError("No client available.")
         if not self.connected:
             raise RuntimeError("Not connected to the MCP server.")
         return self.client
@@ -109,9 +97,6 @@ class MCPClient:
         return await client.get_prompt(prompt_name, arguments=arguments or {})
 
     async def disconnect(self) -> None:
-        if not self.client:
-            print("No client to disconnect.", file=sys.stderr)
-            return
         try:
             if not self.connected:
                 raise RuntimeError("Already disconnected from the MCP server.")

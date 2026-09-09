@@ -16,13 +16,14 @@ class SyncMCPClient:
         self._started: threading.Event = threading.Event()
         self._stop_event: Optional[asyncio.Event] = None
         self._session_future: Optional[Future[None]] = None
+        self._running: bool = False
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
         self._loop.close()
 
-    def _run(self, coro: Any, timeout: Optional[int] = None) -> Any:
+    def _run(self, coro: Any, timeout: Optional[int] = 300) -> Any:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
 
@@ -36,24 +37,47 @@ class SyncMCPClient:
             await self._client.disconnect()
 
     def start(self) -> None:
+        if self._running:
+            raise RuntimeError("MCP session is already running")
         self._thread.start()
         self._session_future = asyncio.run_coroutine_threadsafe(
             self._session(), self._loop
         )
         if not self._started.wait(timeout=10):
-            raise RuntimeError("Error while starting MCP session")
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(timeout=5)
+            raise RuntimeError(
+                "Error while starting MCP session, "
+                "could not launch the session"
+            )
+        self._running = True
 
     def stop(self) -> None:
+        if not self._running:
+            return
         if self._stop_event is not None:
             self._loop.call_soon_threadsafe(self._stop_event.set)
-        if self._session_future is not None:
-            self._session_future.result(timeout=10)
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join()
+        try:
+            if self._session_future is not None:
+                self._session_future.result(timeout=10)
+        except Exception as e:
+            raise RuntimeError(
+                "Error while stopping MCP session, "
+                "could not stop the session"
+            ) from e
+        finally:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
+            self._thread.join(timeout=5)
+            self._running = False
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
+        if not self._running:
+            raise RuntimeError("MCP session is not running")
         attr = getattr(self._client, name)
         if not callable(attr):
             return attr
