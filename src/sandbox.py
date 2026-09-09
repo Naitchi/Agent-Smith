@@ -6,6 +6,7 @@ from multiprocessing import Process, Queue
 from types import FrameType
 from mcp_types import Tool
 from queue import Empty
+import threading
 import tempfile
 import builtins
 import resource
@@ -39,8 +40,10 @@ class Sandbox(SandboxProtocol):
         config: SandboxConfig = SandboxConfig(),
     ) -> None:
         self.config = config
-        self.mcp_client: Optional[MCPClient] = MCPClient(
-            url=url, server_path=server_path
+        self.mcp_client: Optional[MCPClient] = (
+            MCPClient(url=url, server_path=server_path)
+            if (url or server_path)
+            else None
         )
         self.sync_client: Optional[SyncMCPClient] = (
             SyncMCPClient(self.mcp_client) if self.mcp_client else None
@@ -57,6 +60,14 @@ class Sandbox(SandboxProtocol):
                     f"Error occurred while fetching tools: {e}",
                     file=sys.stderr,
                 )
+        self.tool_names: List[str] = [tool.name for tool in self._tools]
+        self._tool_requests: Queue[Any] = Queue()
+        self._tool_responses: Queue[Any] = Queue()
+        if self.tool_names:
+            self.bridge_thread = threading.Thread(
+                target=self._bridge_loop, daemon=True
+            )
+            self.bridge_thread.start()
 
     def _restricted_import(
         self,
@@ -116,6 +127,40 @@ class Sandbox(SandboxProtocol):
                 )
         raise PermissionError(f"Access to file '{file}' is not allowed.")
 
+    def _bridge_loop(self) -> None:
+        if self.sync_client is None:
+            return
+
+        while True:
+            item = self._tool_requests.get()
+            if item is None:
+                break
+            name, kwargs = item
+            try:
+                rslt = self.sync_client.use_tool(name, kwargs)
+                text = rslt.content[0].text if rslt.content else None
+                if rslt.is_error:
+                    self._tool_responses.put((False, text or "Tool error"))
+                else:
+                    self._tool_responses.put((True, text))
+            except Exception as e:
+                self._tool_responses.put((False, str(e)))
+
+    @staticmethod
+    def _make_tool_proxy(
+        name: str, request_q: Queue[Any], response_q: Queue[Any]
+    ) -> Callable[..., Any]:
+        def proxy(**kwargs: Any) -> Any:
+            request_q.put((name, kwargs))
+            success, payload = response_q.get()
+            if not success:
+                raise RuntimeError(
+                    f"Tool '{name}' execution failed: {payload}"
+                )
+            return payload
+
+        return proxy
+
     def _save_namespace(self, namespace: Dict[str, Any]) -> bytes:
         return dill.dumps(namespace)
 
@@ -151,11 +196,11 @@ class Sandbox(SandboxProtocol):
             return True
         return False
 
-    def _is_code_not_safe(self, code: str) -> bool:
+    def _is_code_not_safe(self, code: str) -> Optional[str]:
         try:
             tree = ast.parse(code)
-        except SyntaxError:
-            return True
+        except SyntaxError as e:
+            return f"SyntaxError in code: {e}"
 
         for node in ast.walk(tree):
             if (
@@ -164,8 +209,8 @@ class Sandbox(SandboxProtocol):
             ) or isinstance(node, ast.Attribute):
                 node = self._check_disallowed_attributes(node)
                 if node:
-                    return True
-        return False
+                    return "Code contains disallowed operations."
+        return None
 
     @staticmethod
     def _timeout_handler(signum: int, frame: FrameType | None) -> None:
@@ -195,6 +240,14 @@ class Sandbox(SandboxProtocol):
     def _final_answer(self, answer: Any) -> None:
         raise self._FinalAnswer(answer)
 
+    @staticmethod
+    def _can_pickle(value: Any) -> bool:
+        try:
+            dill.dumps(value)
+            return True
+        except Exception:
+            return False
+
     def _worker(
         self,
         code: str,
@@ -203,6 +256,9 @@ class Sandbox(SandboxProtocol):
         queue: Queue[tuple[ExecutionResult, bytes]],
         temp_stderr: IO[str],
         temp_stdout: IO[str],
+        tool_requests: Queue[Any],
+        tool_responses: Queue[Any],
+        tool_names: List[str],
     ) -> None:
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
@@ -218,6 +274,11 @@ class Sandbox(SandboxProtocol):
         )
         if namespace_save is not None:
             namespace.update(dill.loads(namespace_save))
+
+        for name in tool_names:
+            namespace[name] = self._make_tool_proxy(
+                name, tool_requests, tool_responses
+            )
 
         start = time.time()
         result = ExecutionResult()
@@ -247,9 +308,27 @@ class Sandbox(SandboxProtocol):
         )
         temp_stderr.close()
         temp_stdout.close()
-        queue.put((result, self._save_namespace(namespace)))
+        live_keys = set(tool_names) | {
+            "final_answer",
+            "__builtins__",
+            "__name__",
+        }
+        persisted = {k: v for k, v in namespace.items() if k not in live_keys}
+        try:
+            saved = self._save_namespace(persisted)
+        except Exception:
+            pickable = {
+                k: v for k, v in persisted.items() if self._can_pickle(v)
+            }
+            saved = self._save_namespace(pickable)
+            result.stderr += "\n[Note: some variables could not be persisted]"
+        queue.put((result, saved))
 
     def execute(self, code: str) -> ExecutionResult:
+        rslt_icns: Optional[str] = self._is_code_not_safe(code)
+        if rslt_icns:
+            return ExecutionResult(error=rslt_icns, duration_ms=0.0)
+
         q: Queue[tuple[ExecutionResult, bytes]] = Queue()
         temp_stderr: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
         temp_stdout: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
@@ -262,40 +341,45 @@ class Sandbox(SandboxProtocol):
                 q,
                 temp_stderr,
                 temp_stdout,
+                self._tool_requests,
+                self._tool_responses,
+                self.tool_names,
             ),
         )
         result: ExecutionResult
         namespace_bytes: Optional[bytes] = None
-
-        if self._is_code_not_safe(code):
-            return ExecutionResult(
-                error="Code contains disallowed operations."
-            )
+        did_timeout: bool = False
 
         p.start()
         p.join(timeout=self.config.max_execution_time_seconds)
-        if p.is_alive():
+        did_timeout = p.is_alive()
+        if did_timeout:
             p.terminate()
             p.join(timeout=1)
             p.kill()
-            try:
-                result, namespace_bytes = q.get(timeout=1)
-            except Empty:
-                namespace_bytes = None
-                result = ExecutionResult(
-                    error="Execution timed out.",
-                    timed_out=True,
-                    duration_ms=self.config.max_execution_time_seconds * 1000,
-                )
-                result.stdout, result.stderr, result.truncated = (
-                    self._get_stdout_stderr(temp_stdout, temp_stderr)
-                )
-        else:
-            result, namespace_bytes = q.get()
-        if namespace_bytes is not None:
+            p.join(timeout=1)
+        try:
+            result, namespace_bytes = q.get(timeout=5)
             self._namespace_save = namespace_bytes
-        temp_stderr.close()
-        temp_stdout.close()
+        except Empty:
+            namespace_bytes = None
+            result = ExecutionResult(
+                error=(
+                    "Execution timed out."
+                    if did_timeout
+                    else "Sandbox process died without returning a result."
+                ),
+                timed_out=did_timeout,
+                duration_ms=self.config.max_execution_time_seconds * 1000,
+            )
+            result.stdout, result.stderr, result.truncated = (
+                self._get_stdout_stderr(temp_stdout, temp_stderr)
+            )
+        finally:
+            temp_stderr.close()
+            temp_stdout.close()
+            p.close()
+            q.close()
         return result
 
     def _format_tool(self, tool: Tool) -> str:
@@ -329,19 +413,17 @@ class Sandbox(SandboxProtocol):
             f"Authorized file path: {self.config.allowed_directories}. "
             f"{self.config.max_output_length} characters max output. "
             "No network access is allowed. "
-            "Variables persist across execute() calls within the same session "
-            "(like a REPL/notebook cell). Do not assume a clean namespace"
-            " after a failed execution. To clear the namespace, call the "
-            "close() method. You can use the final_answer(value) function to"
+            "Variables persist across execute() calls within the same session."
+            " Do not assume a clean namespace"
+            " after a failed execution. To clear the namespace."
+            " You can use the final_answer(value) function to"
             " return a final answer from your code. But it must be a string "
             "or convertible to a string."
         )
-        if not self._tools:
-            tools_section = " No MCP tools available."
-        else:
+        if self._tools:
             tools_section = (
                 " Available MCP tools (call them directly as "
-                "Python functions):\n"
+                "Python functions with keyword arguments):\n"
             )
             for tool in self._tools:
                 tools_section += f"  - {self._format_tool(tool)}\n"
@@ -349,8 +431,11 @@ class Sandbox(SandboxProtocol):
         return f"{base}\n\n{tools_section}"
 
     def close(self) -> None:
-        self._namespace = self._make_initial_namespace()
-        self._namespace_save = None
+        if self.tool_names:
+            self._tool_requests.put(None)
+            self.bridge_thread.join(timeout=1)
+        if self.sync_client is not None:
+            self.sync_client.stop()
 
 
 def main() -> None:
@@ -397,11 +482,10 @@ def main() -> None:
             line_of_code = input(">>>")
             if line_of_code.strip() == "exit":
                 raise KeyboardInterrupt
-            elif line_of_code.strip() == "reset":
-                sandbox.close()
-                print("\nSandbox namespace has been reset.")
             print(sandbox.execute(line_of_code), "\n")
     except (KeyboardInterrupt, EOFError):
         print("\nExiting.")
     except Exception as e:
         print(f"\nError in sandbox: {e}", file=sys.stderr)
+    finally:
+        sandbox.close()
