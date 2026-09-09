@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, Callable, Dict, IO, Optional, List
 from contextlib import redirect_stdout, redirect_stderr
-import threading
-from typing import Any, Callable, Dict, IO, Optional
 from multiprocessing import Process, Queue
 from types import FrameType
+from mcp_types import Tool
 from queue import Empty
 import tempfile
 import builtins
@@ -21,6 +21,7 @@ import sys
 import os
 
 from schemas.contract_model import SandboxProtocol
+from src.mcp_sync_client import SyncMCPClient
 from src.mcp_client import MCPClient
 from schemas import ExecutionResult
 from schemas import SandboxConfig
@@ -33,14 +34,29 @@ class Sandbox(SandboxProtocol):
 
     def __init__(
         self,
-        stdio: Optional[bool] = None,
         url: Optional[str] = None,
+        server_path: Optional[str] = None,
         config: SandboxConfig = SandboxConfig(),
     ) -> None:
         self.config = config
-        self.mcp_client: Optional[MCPClient] = MCPClient(stdio=stdio, url=url)
+        self.mcp_client: Optional[MCPClient] = MCPClient(
+            url=url, server_path=server_path
+        )
+        self.sync_client: Optional[SyncMCPClient] = (
+            SyncMCPClient(self.mcp_client) if self.mcp_client else None
+        )
         self._namespace: Dict[str, Any] = self._make_initial_namespace()
         self._namespace_save: Optional[bytes] = None
+        self._tools: List[Tool] = []
+        if self.sync_client is not None:
+            try:
+                self.sync_client.start()
+                self._tools = self.sync_client.get_tools_list()
+            except Exception as e:
+                print(
+                    f"Error occurred while fetching tools: {e}",
+                    file=sys.stderr,
+                )
 
     def _restricted_import(
         self,
@@ -282,8 +298,28 @@ class Sandbox(SandboxProtocol):
         temp_stdout.close()
         return result
 
+    def _format_tool(self, tool: Tool) -> str:
+        description: str = ""
+        schema = tool.input_schema or {}
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+
+        params: List[Any] = []
+        for name, prop in properties.items():
+            param_type = prop.get("type", "unknown")
+            required_str = " (required)" if name in required else ""
+            params.append(f"{name}: {param_type}{required_str}")
+        signature = f"{tool.name}({', '.join(params)})"
+        if tool.description:
+            description = tool.description.split("\n\n", 1)[0]
+            description = description.replace("\n", " ").strip()
+        else:
+            description = "No description provided."
+        return f"{signature} - {description}"
+
     def get_manual(self) -> str:
-        return (
+        tools_section: str = ""
+        base: str = (
             f"Manual for the sandbox environment. "
             f"{self.config.max_execution_time_seconds} seconds max "
             f"execution time, {self.config.max_memory_mb} MB max memory. "
@@ -300,6 +336,17 @@ class Sandbox(SandboxProtocol):
             " return a final answer from your code. But it must be a string "
             "or convertible to a string."
         )
+        if not self._tools:
+            tools_section = " No MCP tools available."
+        else:
+            tools_section = (
+                " Available MCP tools (call them directly as "
+                "Python functions):\n"
+            )
+            for tool in self._tools:
+                tools_section += f"  - {self._format_tool(tool)}\n"
+
+        return f"{base}\n\n{tools_section}"
 
     def close(self) -> None:
         self._namespace = self._make_initial_namespace()
@@ -334,21 +381,11 @@ def main() -> None:
             print(f"Error loading config: {e}", file=sys.stderr)
             return
         sandbox = Sandbox(
-            config=config, stdio=args.mcp_stdio, url=args.mcp_server
+            config=config, server_path=args.mcp_stdio, url=args.mcp_server
         )
     else:
-        sandbox = Sandbox(stdio=args.mcp_stdio, url=args.mcp_server)
+        sandbox = Sandbox(server_path=args.mcp_stdio, url=args.mcp_server)
     try:
-        if args.mcp_stdio or args.mcp_server:
-            print("Connecting to MCP server...")
-            threading.Thread(
-                target=sandbox.mcp_client.connect, daemon=True
-            ).start()
-        else:
-            print(
-                "No MCP server specified. No MCP"
-                " connection will be established."
-            )
         # TODO voir pour tester avec du code avec des fonctions de plusieurs
         # lignes avec codeop ? ou code.InteractiveConsole ?
         print(
