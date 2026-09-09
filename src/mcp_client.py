@@ -20,20 +20,13 @@ import sys
 class MCPClient:
     def __init__(
         self,
-        server_path: Optional[str] = "./mcp_tools_mbpp.py",
+        server_path: Optional[str] = None,
         url: Optional[str] = None,
     ) -> None:
         self.url = url
         self.server_path = server_path
         self.client: Optional[Client] = self.build_client()
         self.connected = False
-
-    def _require_client(self) -> Client:
-        if self.client is None:
-            raise RuntimeError("No client available.")
-        if not self.connected:
-            raise RuntimeError("Not connected to the MCP server.")
-        return self.client
 
     def build_client(self) -> Optional[Client]:
         try:
@@ -77,6 +70,13 @@ class MCPClient:
         except Exception as e:
             print(f"Failed to connect to the MCP server: {e}", file=sys.stderr)
             raise
+
+    def _require_client(self) -> Client:
+        if self.client is None:
+            raise RuntimeError("No client available.")
+        if not self.connected:
+            raise RuntimeError("Not connected to the MCP server.")
+        return self.client
 
     async def get_tools_list(self) -> List[Tool]:
         client = self._require_client()
