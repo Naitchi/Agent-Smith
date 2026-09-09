@@ -1,8 +1,9 @@
-SYSTEM_PROMPT = """Tu résous des tâches de programmation en écrivant du Python.
-À chaque étape, écris un unique bloc de code Python dans une fence ```py.
-Utilise print() pour observer les valeurs intermédiaires.
-Les variables persistent d'une étape à l'autre.
-Quand tu as la réponse définitive, appelle final_answer(valeur) toute tres reponse doivent etre en anglais.
+SYSTEM_PROMPT = """You solve programming tasks by writing Python.
+At each step, write a single Python code block inside a ```py fence.
+Use print() to inspect intermediate values.
+Variables persist from one step to the next.
+When you have the definitive answer, call final_answer(value).
+Always write in English.
 """
 
 
@@ -15,25 +16,34 @@ AUTHORIZED_GROQ = [
     "qwen/qwen3.6-27b",
     "qwen/qwen3.8-27b",
     "groq/compound",
-    "groq/compound-mini",
+    "groq/compound-mini"
 ]
 AUTHORIZED_GEMINI = [
     "gemini-3.7-flash", 
     "gemini-3.6-flash",
     "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-flash-latest",
-    "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite"
 ]
 
 AUTHORIZED_LLM = AUTHORIZED_GROQ + AUTHORIZED_GEMINI
 
-def create_newcontext(current_context: str, original_prompt: str) -> str:
-    return (f"You the  next one llm that i use the original prompt is '{original_prompt}'\
-            can you complete that reponse from previous llm :{current_context}. \
-                take his behaviour and don't add parasite words")
+RELAIS_MODELE = (
+    "You are taking over an ongoing task from another model. "
+    "The conversation above is your own history: continue from it, "
+    "keep the same output format, and do not restart from scratch."
+)
+
+def create_newcontext(current_context: str, original_prompt: str, max_chars: int = 1200) -> str:
+    ctx = current_context[-max_chars:]
+    if len(current_context) > max_chars:
+        ctx = "[...truncated...]\n" + ctx
+    return (
+        "You are taking over from another assistant that was interrupted mid-task.\n"
+        f"Original task: {original_prompt}\n"
+        f"Last output it produced (possibly incomplete):\n{ctx}\n"
+        "Continue from there, in the same format. Do not restart from scratch "
+        "and do not mention this handover."
+    )
 
 
 

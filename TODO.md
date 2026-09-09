@@ -50,6 +50,8 @@ La seule chose que mobenais connaît de bclairot : `Sandbox.execute()`, `Sandbox
 - [x] `pyproject.toml` avec les entry points :
   - [x] `sandbox = "agent_smith.sandbox.cli:main"` → `uv run sandbox`
   - [ ] `agent_mbpp` et `agent_swebench` importables → `uv run python -m agent_mbpp`
+        *(`src/agent_MBPP.py` existe mais est vide (0 octet) et non commité ; aucun entry point
+        dans `pyproject.toml`, qui n'expose que `sandbox`)*
 - [x] `.env.example`, `.gitignore` (`.env`, `cache/`, `evaluations/`)
 - [x] `sandbox_template.json` à la racine
 - [x] `mcp_tools_mbpp.py` et `mcp_tools_swebench.py` à la racine (imposé par le sujet)
@@ -101,11 +103,13 @@ class SandboxProtocol(Protocol):
 
 Pour ne pas s'attendre l'un l'autre :
 
-- [ ] **bclairot fournit à mobenais un `FakeSandbox`** (10 lignes) dès le jour 1 : `execute()` fait
+- [~] **bclairot fournit à mobenais un `FakeSandbox`** (10 lignes) dès le jour 1 : `execute()` fait
       un `exec()` naïf, `get_manual()` renvoie un texte en dur. mobenais peut coder toute
-      sa boucle dessus.
+      sa boucle dessus. *(jamais livré ; la vraie `Sandbox` a servi directement — d'où le
+      bloquant mobenais.0)*
 - [ ] **mobenais fournit à bclairot un `scripts/fake_agent.py`** : un script qui envoie 3 blocs de
       code en dur à la sandbox et affiche les `ExecutionResult`. bclairot teste sans LLM.
+      *(n'existe pas ; `scripts/test_mcp.py` (bclairot) teste le client MCP, pas la sandbox)*
 
 ## 0.7 Répartition des fichiers (évite les conflits git)
 
@@ -122,30 +126,79 @@ Pour ne pas s'attendre l'un l'autre :
 
 # LOT mobenais — CÔTÉ AGENT
 
+## mobenais.0 Bloquants et bugs relevés — audit du 2026-09-08
+
+- [x] ~~🔴 BLOQUANT — la chaîne agent ne démarre plus (`TypeError` sur `MCPClient`).~~
+      **Levé le 2026-09-09** : `src/sandbox.py:41` passe `stdio` en positionnel sur
+      `server_path`, donc pas de `TypeError`. `Sandbox()` se construit et
+      `execute("print(1+1)")` renvoie `stdout='2\n'`.
+- [ ] 🔴 **Reste bloquant : le MCP n'est jamais branché.** Ce même `stdio=None` positionnel
+      écrase le défaut `server_path="./mcp_tools_mbpp.py"` → `Error building client: Either
+      url or server_path must be provided`, `mcp_client` inutilisable. La sandbox tourne
+      **sans aucun outil MCP** : pas de `run_tests`, donc aucune validation possible d'une
+      solution MBPP. À trancher avec bclairot (cf. §0.5, qui est encore `[~]`).
+- [ ] `AgentLoopConf` **ignore le `llm` qu'on lui passe** : `schemas/agent_class_monitoring.py:27`
+      force `GeminiLLM("gemini-3.1-flash-lite")` alors que `model_name = random.choice(models_name)`
+      → le `model_name` écrit dans `StepMetrics` n'est pas le modèle réellement interrogé
+      (métriques de benchmark faussées, et provenance douteuse pour la correction).
+- [ ] **Limites par défaut hors sujet** : `max_iterations=45`, `11_000_000` in, `15_000_000` out,
+      `1_200_000` s — alors que le docstring de `default_conf()` annonce « les limites MBPP ».
+      Cible MBPP : 10 / 6k / 1.5k / 120 s.
+- [ ] `init_value()` **recharge les compteurs de tokens** depuis `backup_memory/backup.json` :
+      un run précédent crashé gonfle les totaux du run suivant → dépassement de budget fantôme
+      à la correction. À neutraliser sur le chemin moulinette.
+- [ ] Le budget est vérifié **après** l'appel LLM → la limite de 6k tokens d'entrée peut être
+      franchie avant d'être détectée (à traiter avec la troncature d'historique, §mobenais.3).
+- [ ] `sandbox.get_manual()` existe côté bclairot mais **n'est appelé nulle part** côté agent
+      (cf. §mobenais.4).
+- [x] ~~`SYSTEM_PROMPT` est rédigé en français alors qu'il exige des réponses en anglais.~~
+      **Corrigé le 2026-09-09** : prompt entièrement en anglais (73 tokens). Le fond reste
+      à écrire (cf. §mobenais.4).
+- [ ] `uv run -m src` part sur un prompt de test (`DEFAULT_TASK`) de type injection —
+      à remplacer par une vraie tâche MBPP avant toute démo.
+
 ## mobenais.1 Couche LLM
 
-- [ ] `class LLMResponse` : `text`, `input_tokens`, `output_tokens`, `latency_ms`, `retries`, `api_url`, `model_name`
+- [~] `class LLMResponse` : `text`, `input_tokens`, `output_tokens`, `latency_ms`, `retries`, `api_url`, `model_name`
+      *(`schemas/llm_result.py::LLMResult` a text + tokens + `latency_ms` ; manquent `retries`,
+      `api_url`, `model_name` — la boucle les recompose à la main)*
 - [ ] `class LLMProvider(ABC)` : `complete(messages, stop, max_tokens) -> LLMResponse`
-- [ ] `class OpenAICompatibleProvider(LLMProvider)` (couvre OpenRouter, Groq, Together, Fireworks…)
+      *(seulement un `Protocol` `LLMProtocole.__call__(system, messages)`, pas d'ABC ni de
+      paramètres `stop` / `max_tokens`)*
+- [~] `class OpenAICompatibleProvider(LLMProvider)` (couvre OpenRouter, Groq, Together, Fireworks…)
+      *(`GeminiLLM` et `GroqLLM` dans `schemas/llmclass.py` : deux classes quasi identiques,
+      URL et `max_tokens=2048` en dur, à fusionner en une classe paramétrée par URL)*
 - [ ] Abstraction suffisante pour changer de provider sans refactor (c'est ça qui est noté, pas le choix du provider)
-- [ ] **Multi-tokens par provider — obligatoire**
+      *(non : `AgentLoop.run()` connaît Gemini et Groq nommément — pools, URLs et classes en dur)*
+- [~] **Multi-tokens par provider — obligatoire**
+      *(rotation réelle sur 429, mais écrite inline dans `AgentLoop.run()` et propagée par
+      mutation de `os.environ` — à extraire)*
   - [ ] `class TokenRotator` : `next_key()`, `mark_rate_limited(key, retry_after)`, `mark_exhausted(key)`
-  - [ ] Plusieurs clés lues depuis l'env (`OPENROUTER_API_KEY`, `OPENROUTER_API_KEY_2`, ou liste séparée par virgules)
-- [ ] Fallback de provider si indisponibilité
-- [ ] Retry + backoff sur 429 / 5xx / timeout → comptés dans `retries` et `total_requests`
+  - [x] Plusieurs clés lues depuis l'env (`GEMINI_API_KEYS` / `GROQ_API_KEYS`, liste séparée par virgules,
+        repli sur la clé simple) — *à documenter dans `.env.example`, qui ne liste que `GROQ_API_KEY`
+        et `GEMINI_API_KEY`*
+- [x] Fallback de provider si indisponibilité *(bascule modèle Gemini → Groq quand toutes les clés
+      sont rate-limitées, puis `AgentLoopError` si le pool est vide)*
+- [~] Retry + backoff sur 429 / 5xx / timeout → comptés dans `retries` et `total_requests`
+      *(429 uniquement, retry immédiat sans backoff ni `Retry-After` ; 5xx et timeouts remontent
+      en erreur. Le comptage `retries` / `total_requests`, lui, est bon)*
 - [ ] **`stop_sequences`** (`<end_code>`, `</tool_call>`…) → empêche le modèle d'halluciner l'observation
-- [ ] Usage tracking : tokens, retries, latence, nombre de requêtes
+- [x] Usage tracking : tokens, retries, latence, nombre de requêtes
 - [x] Free tiers uniquement, **aucune clé en dur** (grade 0 sinon)
 
 ## mobenais.2 Extraction de code
 
-- [ ] `extract_code(llm_text: str) -> ExtractedCode | None`
-- [ ] Format 1 — bloc Python (primaire) : ` ```python ... ``` ` + `<end_code>`
+- [~] `extract_code(llm_text: str) -> ExtractedCode | None`
+      *(`schemas/tools_agent.py::extract_code` renvoie `str | None` ; pas de type `ExtractedCode`,
+      donc aucun moyen de dire au LLM quel format a été reconnu)*
+- [~] Format 1 — bloc Python (primaire) : ` ```python ... ``` ` + `<end_code>`
+      *(fences ```` ``` ````/```py``` OK, dernier bloc retenu ; `<end_code>` non géré)*
 - [ ] Format 2 — XML Anthropic : `<invoke name="..."><parameter name="...">…</parameter></invoke>`
 - [ ] Format 3 — JSON/Hermes : `<tool_call>{"name": "...", "arguments": {...}}</tool_call>`
 - [ ] Format 4 — ReAct : `Action: tool_name` / `Action Input: {...}`
 - [ ] `to_python_call(name, args) -> str` → `result = read_file(filepath="/testbed/file.py")`
 - [ ] Tolérance : bloc non fermé, ` ``` ` sans langage, texte parasite
+      *(bloc non fermé → `None` ; « ``` sans langage » OK)*
 - [ ] Si interprétation « de secours » → le signaler pour que bclairot/le LLM le sache
 - [x] `None` propre si rien d'exploitable → observation d'erreur explicite au LLM
 
@@ -161,11 +214,18 @@ Pour ne pas s'attendre l'un l'autre :
 - [x] Arrêt sur `result.final_answer is not None` OU limite atteinte
 - [x] Aucun crash possible → `SolutionOutput(success=False, error=...)` écrit quand même
 - [ ] Troncature / résumé des vieilles observations pour tenir le budget
+      *(prioritaire : c'est ce qui rend les 6k tokens d'entrée MBPP tenables)*
+- [ ] Sur `max_iterations` atteint, `solution` reste `""` — renvoyer le dernier code candidat
 
 ## mobenais.4 System prompts (fortement noté)
 
+> État : un seul `SYSTEM_PROMPT` de 5 lignes, en français, dans `schemas/tools_agent.py`.
+> Tout ce qui suit est à écrire.
+
 - [ ] Doc des outils **injectée depuis `sandbox.get_manual()`** — jamais recopiée à la main
+      *(`get_manual()` n'est appelé nulle part dans `src/agent_loop.py`)*
 - [ ] Slots explicites : `Thought:` / `Code:` / `Observation:`
+      *(la boucle réinjecte bien `observation\n...` en message user, mais le prompt ne cadre rien)*
 - [ ] **Au moins un exemple complet** de boucle de raisonnement (few-shot)
 - [ ] Méthodologie de debug pas-à-pas : lire → chercher → hypothèse → éditer → tester
 - [ ] Prompt MBPP et prompt SWE-bench séparés
@@ -177,6 +237,10 @@ Pour ne pas s'attendre l'un l'autre :
 
 ## mobenais.5 CLI agent MBPP
 
+> ⚠️ **Rien n'est commencé** : `src/agent_MBPP.py` est vide (0 octet, non commité).
+> `src/__main__.py` est un main de démo (tâche en dur, pas de `--task-file`, pas d'écriture
+> de `solution.json`). Sans ce CLI, `exam_mbpp.sh` ne peut pas tourner du tout.
+
 - [ ] `uv run python -m agent_mbpp --task-file ... --output ... --model-name ... --provider-url ...`
 - [ ] Clé API lue depuis l'environnement
 - [ ] Chargement `MBPPTaskInput`, lancement du serveur MCP MBPP (selon §0.5)
@@ -185,6 +249,8 @@ Pour ne pas s'attendre l'un l'autre :
 - [ ] Objectif : **4/5**
 
 ## mobenais.6 CLI agent SWE-bench
+
+> ⚠️ **Rien n'est commencé** (aucun fichier).
 
 - [ ] `uv run python -m agent_swebench --task-file ... --output ... --model-name ... --provider-url ...`
 - [ ] Chargement `SWEBenchTaskInput`, passage des infos au serveur MCP de bclairot
@@ -259,8 +325,11 @@ Le champ `error` de `ExecutionResult` doit couvrir :
 
 - [x] `uv run sandbox` → REPL interactif
 - [x] `uv run sandbox sandbox_template.json`
-- [~] `uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py" sandbox_template.json` (arg parsé mais pas branché, pas de client MCP)
-- [~] `uv run sandbox --mcp-server <URL>` (idem, arg parsé mais inutilisé)
+- [~] `uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py" sandbox_template.json`
+      *(args passés à `Sandbox(stdio=..., url=...)` → `TypeError` (cf. mobenais.0) ; et
+      `sandbox.mcp_client.connect` est une coroutine lancée dans un `threading.Thread`,
+      donc jamais awaitée)*
+- [~] `uv run sandbox --mcp-server <URL>` *(idem)*
 - [x] Comportement :
   - [x] Boucle prompt → lecture → exécution dans le **même namespace**
   - [x] Toutes les restrictions actives (imports, FS, timeout, RAM)
@@ -277,13 +346,17 @@ Le champ `error` de `ExecutionResult` doit couvrir :
 
 ## bclairot.7 Client MCP
 
-- [ ] `class MCPClient`
-  - [ ] `connect_stdio(command: str)` — lance le serveur en sous-process
-  - [ ] `connect_http(url: str)` — transport streamable HTTP
-  - [ ] `list_tools() -> list[ToolSchema]`
-  - [ ] `list_resources()` / `list_prompts()` (le sujet demande de les exposer)
-  - [ ] `call_tool(name, arguments) -> str`
-  - [ ] `close()`
+- [x] `class MCPClient` (`src/mcp_client.py`, API **async**)
+  - [~] `connect_stdio(command: str)` — lance le serveur en sous-process
+        *(`MCPClient(server_path=...)` + `connect()` ; pas de méthode dédiée, `python` en dur
+        comme commande)*
+  - [~] `connect_http(url: str)` — transport streamable HTTP *(via `MCPClient(url=...)`)*
+  - [x] `list_tools() -> list[ToolSchema]` → `get_tools_list()`
+  - [x] `list_resources()` / `list_prompts()` → `get_resources_list()` / `get_prompt_list()`
+  - [x] `call_tool(name, arguments) -> str` → `use_tool()`
+  - [x] `close()` → `disconnect()`
+  - [ ] **Pont async → sync** : la `Sandbox` est synchrone, le client ne lui est pas branché
+        (testé seulement par `scripts/test_mcp.py`)
 - [ ] `make_wrappers(client) -> dict[str, Callable]`
   - [ ] Une fonction Python par outil, avec `__name__` et `__doc__` corrects
   - [ ] Injectée dans le namespace sandbox

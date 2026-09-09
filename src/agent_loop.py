@@ -20,6 +20,7 @@ from schemas import (AUTHORIZED_GEMINI,
                      SolutionOutput,
                      StepMetrics,
                      extract_code,
+                     RELAIS_MODELE
                      )
 
 
@@ -75,7 +76,8 @@ class AgentLoop:
             self, 
             task_id: str, 
             benchmark: str, 
-            user_prompt:str) -> SolutionOutput:
+            user_prompt:str,
+            ) -> SolutionOutput:
         start = time.monotonic()
         message: list[dict] = [
             {
@@ -90,6 +92,7 @@ class AgentLoop:
         consecutive_errors = 0
 
         current_context = ""
+        relais_en_attente: str | None = None
         gemini_pool = list(AUTHORIZED_GEMINI)
         groq_pool = list(AUTHORIZED_GROQ)
         exhausted: list[str] = []
@@ -115,7 +118,15 @@ class AgentLoop:
                         try:
                             request_start = time.monotonic()
                             total_request += 1
-                            result = self.agent_loop.llm(self.agent_loop.system_prompt, message)
+                            prompt_systeme = self.agent_loop.system_prompt
+                            if relais_en_attente:
+                                prompt_systeme += "\n\n" + relais_en_attente
+                            print("----------------TEST IF CHANGE MODEL prompt -----------------")
+                            print(f"Step {step} - Model: {self.agent_loop.model_name} - API URL: {self.agent_loop.api_url}")
+                            print(f"Prompt systeme:\n{prompt_systeme}\n")
+                            print("----------------TEST IF CHANGE MODEL prompt -----------------")
+                            result = self.agent_loop.llm(prompt_systeme, message)
+                            relais_en_attente = None
                             current_context += result.text
                             request_conv_time = (time.monotonic() - request_start) * 1000
                             break
@@ -161,6 +172,7 @@ class AgentLoop:
                                     f"{len(exhausted)}  rate limit -> "
                                     f"{', '.join(exhausted)}"
                                 )
+                            relais_en_attente = RELAIS_MODELE
                             print(
                                 f"429 rate limit -> bascule sur {self.agent_loop.model_name} "
                                 f"({self.agent_loop.api_url})"

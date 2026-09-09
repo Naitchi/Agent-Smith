@@ -38,7 +38,7 @@ class Sandbox(SandboxProtocol):
         config: SandboxConfig = SandboxConfig(),
     ) -> None:
         self.config = config
-        self.mcp_client: Optional[MCPClient] = MCPClient(stdio=stdio, url=url)
+        self.mcp_client: Optional[MCPClient] = MCPClient(stdio, url=url)
         self._namespace: Dict[str, Any] = self._make_initial_namespace()
         self._namespace_save: Optional[bytes] = None
 
@@ -52,10 +52,10 @@ class Sandbox(SandboxProtocol):
     ) -> types.ModuleType:
         if "." in name:
             if f"{name.split('.')[0]}.*" not in self.config.authorized_imports:
-                raise ImportError(f"Import of module '{name}' is not allowed.")
+                raise ImportError(f"Import of module '{name}' is not allowed.7777777777")
         else:
             if name not in self.config.authorized_imports:
-                raise ImportError(f"Import of module '{name}' is not allowed.")
+                raise ImportError(f"Import of module '{name}' is not allowed.777777777")
         module = builtins.__import__(name, globals, locals, fromlist, level)
         unauthorized: list[str] = []
         for from_name in fromlist or ():
