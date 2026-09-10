@@ -62,8 +62,15 @@ class Sandbox(SandboxProtocol):
                     file=sys.stderr,
                 )
         self.tool_names: List[str] = [tool.name for tool in self._tools]
+        self._tool_param_names: Dict[str, List[str]] = {
+            tool.name: list((tool.input_schema.get("properties") or {}).keys())
+            for tool in self._tools
+        }
         self._tool_requests: Queue[Any] = Queue()
         self._tool_responses: Queue[Any] = Queue()
+        self._tool_wait_total: float = 0.0
+        self._tool_active_since: Optional[float] = None
+        self._tool_lock: threading.Lock = threading.Lock()
         if self.tool_names:
             self.bridge_thread = threading.Thread(
                 target=self._bridge_loop, daemon=True
@@ -80,10 +87,14 @@ class Sandbox(SandboxProtocol):
     ) -> types.ModuleType:
         if "." in name:
             if f"{name.split('.')[0]}.*" not in self.config.authorized_imports:
-                raise ImportError(f"Import of module '{name}' is not allowed.")
+                raise ImportError(
+                    f"Error: Import of module '{name}' is not allowed."
+                )
         else:
             if name not in self.config.authorized_imports:
-                raise ImportError(f"Import of module '{name}' is not allowed.")
+                raise ImportError(
+                    f"Error: Import of module '{name}' is not allowed."
+                )
         module = builtins.__import__(name, globals, locals, fromlist, level)
         unauthorized: list[str] = []
         for from_name in fromlist or ():
@@ -96,7 +107,8 @@ class Sandbox(SandboxProtocol):
                     unauthorized.append(sub_name)
         if unauthorized:
             raise ImportError(
-                f"Import of module/s {', '.join(unauthorized)} is not allowed."
+                f"Error: Import of module/s {', '.join(unauthorized)} "
+                "is not allowed."
             )
         return module
 
@@ -126,7 +138,9 @@ class Sandbox(SandboxProtocol):
                     closefd,
                     opener,
                 )
-        raise PermissionError(f"Access to file '{file}' is not allowed.")
+        raise PermissionError(
+            f"Error: Access to file '{file}' is not allowed."
+        )
 
     def _bridge_loop(self) -> None:
         if self.sync_client is None:
@@ -140,6 +154,8 @@ class Sandbox(SandboxProtocol):
             if generation_nb < self.generation_nb:
                 continue
             try:
+                with self._tool_lock:
+                    self._tool_active_since = time.monotonic()
                 rslt = self.sync_client.use_tool(name, kwargs)
                 text = rslt.content[0].text if rslt.content else None
                 if rslt.is_error:
@@ -150,6 +166,12 @@ class Sandbox(SandboxProtocol):
                     self._tool_responses.put((generation_nb, True, text))
             except Exception as e:
                 self._tool_responses.put((generation_nb, False, str(e)))
+            finally:
+                with self._tool_lock:
+                    self._tool_wait_total += (
+                        time.monotonic() - self._tool_active_since
+                    )
+                    self._tool_active_since = None
 
     # TODO mettre un nombre de sequensage si le code exec utilise des threads ?
     @staticmethod
@@ -158,22 +180,68 @@ class Sandbox(SandboxProtocol):
         request_q: Queue[Any],
         response_q: Queue[Any],
         generation_nb: int,
+        tool_param_names: Dict[str, List[str]],
     ) -> Callable[..., Any]:
-        def proxy(**kwargs: Any) -> Any:
+        def proxy(*args: Any, **kwargs: Any) -> Any:
+            params: List[str] = tool_param_names.get(name, [])
+            if len(args) > len(params):
+                raise TypeError(f"Error: Too many args for {name}.")
+            args_kw = dict(zip(params, args))
+            if args_kw.keys() & kwargs.keys():
+                raise TypeError(
+                    f"Error: Multipule values for the same kw in {name}."
+                )
+            kwargs = {**args_kw, **kwargs}
+
             request_q.put((generation_nb, name, kwargs))
             generation_nb_rslt, success, payload = response_q.get()
             while generation_nb_rslt != generation_nb:
                 generation_nb_rslt, success, payload = response_q.get()
             if not success:
                 raise RuntimeError(
-                    f"Tool '{name}' execution failed: {payload}"
+                    f"Error: Tool '{name}' execution failed: {payload}"
                 )
             return payload
 
         return proxy
 
     def _save_namespace(self, namespace: Dict[str, Any]) -> bytes:
-        return dill.dumps(namespace)
+        return dill.dumps(namespace, recurse=True)
+
+    @staticmethod
+    def _restore_namespace(
+        namespace: Dict[str, Any], namespace_save: bytes
+    ) -> None:
+        namespace.update(dill.loads(namespace_save))
+        for key, value in list(namespace.items()):
+            if isinstance(value, types.FunctionType):
+                namespace[key] = types.FunctionType(
+                    value.__code__,
+                    namespace,
+                    value.__name__,
+                    value.__defaults__,
+                    value.__closure__,
+                )
+
+    def _persist_namespace(
+        self, namespace: Dict[str, Any], tool_names: List[str]
+    ) -> tuple[bytes, str]:
+        live_keys = set(tool_names) | {
+            "final_answer",
+            "__builtins__",
+            "__name__",
+        }
+        persisted = {k: v for k, v in namespace.items() if k not in live_keys}
+        try:
+            return self._save_namespace(persisted), ""
+        except Exception:
+            pickable = {
+                k: v for k, v in persisted.items() if self._can_pickle(v)
+            }
+            return (
+                self._save_namespace(pickable),
+                "\n[Note: some variables could not be persisted]",
+            )
 
     def _make_initial_namespace(self) -> Dict[str, Any]:
         allowed_builtins = {
@@ -211,7 +279,7 @@ class Sandbox(SandboxProtocol):
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
-            return f"SyntaxError in code: {e}"
+            return f"Error: SyntaxError in code: {e}"
 
         for node in ast.walk(tree):
             if (
@@ -220,7 +288,7 @@ class Sandbox(SandboxProtocol):
             ) or isinstance(node, ast.Attribute):
                 node = self._check_disallowed_attributes(node)
                 if node:
-                    return "Code contains disallowed operations."
+                    return "Error: Code contains disallowed operations."
         return None
 
     @staticmethod
@@ -246,7 +314,9 @@ class Sandbox(SandboxProtocol):
 
     @staticmethod
     def _blocked_call(*args: Any, **kwargs: Any) -> None:
-        raise PermissionError("Network access is disabled in the sandbox.")
+        raise PermissionError(
+            "Error: Network access is disabled in the sandbox."
+        )
 
     def _final_answer(self, answer: Any) -> None:
         raise self._FinalAnswer(answer)
@@ -254,7 +324,7 @@ class Sandbox(SandboxProtocol):
     @staticmethod
     def _can_pickle(value: Any) -> bool:
         try:
-            dill.dumps(value)
+            dill.dumps(value, recurse=True)
             return True
         except Exception:
             return False
@@ -271,6 +341,7 @@ class Sandbox(SandboxProtocol):
         tool_responses: Queue[Any],
         tool_names: List[str],
         generation_nb: int,
+        tool_param_names: Dict[str, List[str]],
     ) -> None:
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
@@ -285,11 +356,15 @@ class Sandbox(SandboxProtocol):
             (self.config.max_open_files, self.config.max_open_files),
         )
         if namespace_save is not None:
-            namespace.update(dill.loads(namespace_save))
+            self._restore_namespace(namespace, namespace_save)
 
         for name in tool_names:
             namespace[name] = self._make_tool_proxy(
-                name, tool_requests, tool_responses, generation_nb
+                name,
+                tool_requests,
+                tool_responses,
+                generation_nb,
+                tool_param_names,
             )
 
         start = time.time()
@@ -305,13 +380,14 @@ class Sandbox(SandboxProtocol):
                     "final_answer value could not be converted to string"
                 )
         except TimeoutError:
-            result.error = "Execution timed out."
+            result.error = "Error: Execution timed out."
             result.timed_out = True
             result.duration_ms = self.config.max_execution_time_seconds * 1000
         except MemoryError:
-            result.error = "Memory limit exceeded."
+            result.error = "Error: Memory limit exceeded."
         except Exception as e:
-            result.error = str(e)
+            msg = str(e)
+            result.error = msg if msg.startswith("Error:") else f"Error: {msg}"
 
         if not result.timed_out:
             result.duration_ms = (time.time() - start) * 1000
@@ -320,20 +396,8 @@ class Sandbox(SandboxProtocol):
         )
         temp_stderr.close()
         temp_stdout.close()
-        live_keys = set(tool_names) | {
-            "final_answer",
-            "__builtins__",
-            "__name__",
-        }
-        persisted = {k: v for k, v in namespace.items() if k not in live_keys}
-        try:
-            saved = self._save_namespace(persisted)
-        except Exception:
-            pickable = {
-                k: v for k, v in persisted.items() if self._can_pickle(v)
-            }
-            saved = self._save_namespace(pickable)
-            result.stderr += "\n[Note: some variables could not be persisted]"
+        saved, note = self._persist_namespace(namespace, tool_names)
+        result.stderr += note
         queue.put((result, saved))
 
     def execute(self, code: str) -> ExecutionResult:
@@ -344,6 +408,7 @@ class Sandbox(SandboxProtocol):
         q: Queue[tuple[ExecutionResult, bytes]] = Queue()
         temp_stderr: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
         temp_stdout: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
+        self._tool_wait_total = 0.0
         self.generation_nb += 1
         p = Process(
             target=self._worker,
@@ -358,6 +423,7 @@ class Sandbox(SandboxProtocol):
                 self._tool_responses,
                 self.tool_names,
                 self.generation_nb,
+                self._tool_param_names,
             ),
         )
         result: ExecutionResult
@@ -365,13 +431,7 @@ class Sandbox(SandboxProtocol):
         did_timeout: bool = False
 
         p.start()
-        p.join(timeout=self.config.max_execution_time_seconds)
-        did_timeout = p.is_alive()
-        if did_timeout:
-            p.terminate()
-            p.join(timeout=1)
-            p.kill()
-            p.join(timeout=1)
+        did_timeout = self._wait_for_worker(p)
         try:
             result, namespace_bytes = q.get(timeout=5)
             self._namespace_save = namespace_bytes
@@ -379,9 +439,10 @@ class Sandbox(SandboxProtocol):
             namespace_bytes = None
             result = ExecutionResult(
                 error=(
-                    "Execution timed out."
+                    "Error: Execution timed out."
                     if did_timeout
-                    else "Sandbox process died without returning a result."
+                    else "Error: Sandbox process died without returning "
+                    "a result."
                 ),
                 timed_out=did_timeout,
                 duration_ms=self.config.max_execution_time_seconds * 1000,
@@ -395,6 +456,27 @@ class Sandbox(SandboxProtocol):
             p.close()
             q.close()
         return result
+
+    def _wait_for_worker(self, p: Process) -> bool:
+        offset: float = 0.0
+        start: float = time.monotonic()
+        while p.is_alive():
+            with self._tool_lock:
+                offset = self._tool_wait_total
+                if self._tool_active_since:
+                    offset += time.monotonic() - self._tool_active_since
+            if (
+                time.monotonic() - start
+            ) - offset >= self.config.max_execution_time_seconds:
+                break
+            p.join(timeout=0.1)
+        if p.is_alive():
+            p.terminate()
+            p.join(timeout=1)
+            p.kill()
+            p.join(timeout=1)
+            return True
+        return False
 
     def _format_tool(self, tool: Tool) -> str:
         description: str = ""
