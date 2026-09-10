@@ -137,10 +137,14 @@ Pour ne pas s'attendre l'un l'autre :
       url or server_path must be provided`, `mcp_client` inutilisable. La sandbox tourne
       **sans aucun outil MCP** : pas de `run_tests`, donc aucune validation possible d'une
       solution MBPP. À trancher avec bclairot (cf. §0.5, qui est encore `[~]`).
-- [ ] `AgentLoopConf` **ignore le `llm` qu'on lui passe** : `schemas/agent_class_monitoring.py:27`
+- [x] ~~`AgentLoopConf` **ignore le `llm` qu'on lui passe** : `schemas/agent_class_monitoring.py:27`
       force `GeminiLLM("gemini-3.1-flash-lite")` alors que `model_name = random.choice(models_name)`
       → le `model_name` écrit dans `StepMetrics` n'est pas le modèle réellement interrogé
-      (métriques de benchmark faussées, et provenance douteuse pour la correction).
+      (métriques de benchmark faussées, et provenance douteuse pour la correction).~~
+      **Corrigé le 2026-09-10** : le `llm` passé est retenu tel quel, et `model_name` en est
+      dérivé (`self.model_name = self.llm.model`) au lieu d'un tirage indépendant — une seule
+      source de vérité, quel que soit le provider. `model: str` ajouté à `LLMProtocole`
+      (`schemas/contract_model.py`, fichier commun → à signaler à bclairot).
 - [ ] **Limites par défaut hors sujet** : `max_iterations=45`, `11_000_000` in, `15_000_000` out,
       `1_200_000` s — alors que le docstring de `default_conf()` annonce « les limites MBPP ».
       Cible MBPP : 10 / 6k / 1.5k / 120 s.

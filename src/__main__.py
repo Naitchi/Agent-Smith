@@ -28,7 +28,7 @@ from .agent_loop import AgentLoop
 # conserver son etat entre deux execute() et lire ses propres observations.
 # --------------------------------------------------------------------------
 
-q1 = """\
+uno = """\
 Count how many integers n in the range [1, 1000000] have a Collatz sequence \
 (n -> n/2 if even, n -> 3n+1 if odd, counting steps until reaching 1) whose \
 length is strictly greater than 250 steps.
@@ -53,7 +53,7 @@ Do not guess the answer and do not answer from memory: the value must come \
 from code you actually ran in this session.
 """
 
-q2 = """\
+dos = """\
 Implement `def longest_common_subsequence(a: str, b: str) -> int` from scratch, \
 then prove it correct by differential testing against a brute-force reference \
 you also write yourself (enumerate every subsequence, only valid for short \
@@ -74,7 +74,7 @@ intermediate DP table for that single pair, find the wrong cell, and fix that.
 Keep each code block under 25 seconds of execution.
 """
 
-q3 = """\
+tres = """\
 A 3x3 sliding puzzle starts at ((1, 2, 3), (4, 0, 6), (7, 5, 8)) where 0 is the \
 empty cell, and the goal is ((1, 2, 3), (4, 5, 6), (7, 8, 0)).
 
@@ -92,12 +92,12 @@ of moves.
 """
 
 task = {
-    "collatz": q1,
-    "lcs": q2,
-    "puzzle": q3,
+    "collatz": uno,
+    "lcs": dos,
+    "puzzle": tres,
 }
 
-DEFAULT_TASK = q2
+DEFAULT_TASK = uno
 
 
 

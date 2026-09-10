@@ -22,8 +22,8 @@ class AgentLoopConf:
             ):
         from src.sandbox import Sandbox
 
-        self.model_name = random.choice(models_name)
-        self.llm = GeminiLLM("gemini-3.1-flash-lite")
+        self.llm = llm if llm is not None else GeminiLLM(random.choice(models_name))
+        self.model_name = self.llm.model
         self.sandbox = sandbox if sandbox is not None else Sandbox()
         self.system_prompt = system_prompt
         self.max_iterations = max_iterations
