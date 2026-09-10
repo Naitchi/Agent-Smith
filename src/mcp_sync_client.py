@@ -1,7 +1,7 @@
-from concurrent.futures import Future
-from typing import Any, Optional
-import threading
 import asyncio
+import threading
+from concurrent.futures import Future
+from typing import Any
 
 from src.mcp_client import MCPClient
 
@@ -14,8 +14,8 @@ class SyncMCPClient:
             target=self._run_loop, daemon=True
         )
         self._started: threading.Event = threading.Event()
-        self._stop_event: Optional[asyncio.Event] = None
-        self._session_future: Optional[Future[None]] = None
+        self._stop_event: asyncio.Event | None = None
+        self._session_future: Future[None] | None = None
         self._running: bool = False
 
     def _run_loop(self) -> None:
@@ -23,7 +23,7 @@ class SyncMCPClient:
         self._loop.run_forever()
         self._loop.close()
 
-    def _run(self, coro: Any, timeout: Optional[int] = 300) -> Any:
+    def _run(self, coro: Any, timeout: int | None = 300) -> Any:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
 
@@ -68,7 +68,7 @@ class SyncMCPClient:
         finally:
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
-            except Exception:
+            except RuntimeError:
                 pass
             self._thread.join(timeout=5)
             self._running = False

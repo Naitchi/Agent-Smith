@@ -1,27 +1,27 @@
-from typing import Any, Dict, List, Optional
+import sys
+from typing import Any
+
 from mcp import (
-    StdioServerParameters,
-    GetPromptResult,
-    stdio_client,
     Client,
+    GetPromptResult,
+    StdioServerParameters,
     Tool,
+    stdio_client,
 )
 from mcp_types import (
-    TextResourceContents,
     BlobResourceContents,
     CallToolResult,
-    Resource,
     Prompt,
+    Resource,
+    TextResourceContents,
 )
-
-import sys
 
 
 class MCPClient:
     def __init__(
         self,
-        server_path: Optional[str] = None,
-        url: Optional[str] = None,
+        server_path: str | None = None,
+        url: str | None = None,
     ) -> None:
         self.url = url
         self.server_path = server_path
@@ -29,7 +29,7 @@ class MCPClient:
         self.connected = False
 
     def build_client(self) -> Client:
-        params: Optional[Any] = None
+        params: Any | None = None
         if (self.url is None) and self.server_path:
             server = StdioServerParameters(
                 command="python", args=[self.server_path]
@@ -66,32 +66,32 @@ class MCPClient:
             raise RuntimeError("Not connected to the MCP server.")
         return self.client
 
-    async def get_tools_list(self) -> List[Tool]:
+    async def get_tools_list(self) -> list[Tool]:
         client = self._require_client()
         return (await client.list_tools()).tools
 
     async def use_tool(
-        self, tool_name: str, params: Optional[Dict[str, Any]] = None
+        self, tool_name: str, params: dict[str, Any] | None = None
     ) -> CallToolResult:
         client = self._require_client()
         return await client.call_tool(tool_name, params or {})
 
-    async def get_resources_list(self) -> List[Resource]:
+    async def get_resources_list(self) -> list[Resource]:
         client = self._require_client()
         return (await client.list_resources()).resources
 
     async def get_resource(
         self, uri: str
-    ) -> List[TextResourceContents | BlobResourceContents]:
+    ) -> list[TextResourceContents | BlobResourceContents]:
         client = self._require_client()
         return (await client.read_resource(uri)).contents
 
-    async def get_prompt_list(self) -> List[Prompt]:
+    async def get_prompt_list(self) -> list[Prompt]:
         client = self._require_client()
         return (await client.list_prompts()).prompts
 
     async def get_prompt(
-        self, prompt_name: str, arguments: Optional[Dict[str, Any]] = None
+        self, prompt_name: str, arguments: dict[str, Any] | None = None
     ) -> GetPromptResult:
         client = self._require_client()
         return await client.get_prompt(prompt_name, arguments=arguments or {})

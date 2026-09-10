@@ -1,31 +1,32 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, IO, Optional, List
-from contextlib import redirect_stdout, redirect_stderr
-from multiprocessing import Process, Queue
-from types import FrameType
-from mcp_types import Tool
-from queue import Empty
-import threading
-import tempfile
-import builtins
-import resource
 import argparse
+import ast
+import builtins
+import json
+import os
+import resource
 import signal
 import socket
-import types
-import json
-import dill
-import time
-import ast
 import sys
-import os
+import tempfile
+import threading
+import time
+import types
+from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
+from multiprocessing import Process, Queue
+from queue import Empty
+from types import FrameType
+from typing import IO, Any
 
+import dill
+from mcp_types import Tool
+
+from schemas import ExecutionResult, SandboxConfig
 from schemas.contract_model import SandboxProtocol
-from src.mcp_sync_client import SyncMCPClient
 from src.mcp_client import MCPClient
-from schemas import ExecutionResult
-from schemas import SandboxConfig
+from src.mcp_sync_client import SyncMCPClient
 
 
 class Sandbox(SandboxProtocol):
@@ -35,23 +36,26 @@ class Sandbox(SandboxProtocol):
 
     def __init__(
         self,
-        url: Optional[str] = None,
-        server_path: Optional[str] = None,
-        config: SandboxConfig = SandboxConfig(),
+        url: str | None = None,
+        server_path: str | None = None,
+        config: SandboxConfig = None,
     ) -> None:
-        self.config = config
-        self.mcp_client: Optional[MCPClient] = (
+        if config:
+            self.config = config
+        else:
+            self.config = SandboxConfig()
+        self.mcp_client: MCPClient | None = (
             MCPClient(url=url, server_path=server_path)
             if (url or server_path)
             else None
         )
-        self.sync_client: Optional[SyncMCPClient] = (
+        self.sync_client: SyncMCPClient | None = (
             SyncMCPClient(self.mcp_client) if self.mcp_client else None
         )
-        self._namespace: Dict[str, Any] = self._make_initial_namespace()
-        self._namespace_save: Optional[bytes] = None
+        self._namespace: dict[str, Any] = self._make_initial_namespace()
+        self._namespace_save: bytes | None = None
         self.generation_nb: int = 0
-        self._tools: List[Tool] = []
+        self._tools: list[Tool] = []
         if self.sync_client is not None:
             try:
                 self.sync_client.start()
@@ -61,15 +65,15 @@ class Sandbox(SandboxProtocol):
                     f"Error occurred while fetching tools: {e}",
                     file=sys.stderr,
                 )
-        self.tool_names: List[str] = [tool.name for tool in self._tools]
-        self._tool_param_names: Dict[str, List[str]] = {
+        self.tool_names: list[str] = [tool.name for tool in self._tools]
+        self._tool_param_names: dict[str, list[str]] = {
             tool.name: list((tool.input_schema.get("properties") or {}).keys())
             for tool in self._tools
         }
         self._tool_requests: Queue[Any] = Queue()
         self._tool_responses: Queue[Any] = Queue()
         self._tool_wait_total: float = 0.0
-        self._tool_active_since: Optional[float] = None
+        self._tool_active_since: float | None = None
         self._tool_lock: threading.Lock = threading.Lock()
         if self.tool_names:
             self.bridge_thread = threading.Thread(
@@ -80,8 +84,8 @@ class Sandbox(SandboxProtocol):
     def _restricted_import(
         self,
         name: str,
-        globals: Dict[str, object] | None = None,
-        locals: Dict[str, object] | None = None,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> types.ModuleType:
@@ -180,10 +184,10 @@ class Sandbox(SandboxProtocol):
         request_q: Queue[Any],
         response_q: Queue[Any],
         generation_nb: int,
-        tool_param_names: Dict[str, List[str]],
+        tool_param_names: dict[str, list[str]],
     ) -> Callable[..., Any]:
         def proxy(*args: Any, **kwargs: Any) -> Any:
-            params: List[str] = tool_param_names.get(name, [])
+            params: list[str] = tool_param_names.get(name, [])
             if len(args) > len(params):
                 raise TypeError(f"Error: Too many args for {name}.")
             args_kw = dict(zip(params, args))
@@ -205,12 +209,12 @@ class Sandbox(SandboxProtocol):
 
         return proxy
 
-    def _save_namespace(self, namespace: Dict[str, Any]) -> bytes:
+    def _save_namespace(self, namespace: dict[str, Any]) -> bytes:
         return dill.dumps(namespace, recurse=True)
 
     @staticmethod
     def _restore_namespace(
-        namespace: Dict[str, Any], namespace_save: bytes
+        namespace: dict[str, Any], namespace_save: bytes
     ) -> None:
         namespace.update(dill.loads(namespace_save))
         for key, value in list(namespace.items()):
@@ -224,7 +228,7 @@ class Sandbox(SandboxProtocol):
                 )
 
     def _persist_namespace(
-        self, namespace: Dict[str, Any], tool_names: List[str]
+        self, namespace: dict[str, Any], tool_names: list[str]
     ) -> tuple[bytes, str]:
         live_keys = set(tool_names) | {
             "final_answer",
@@ -243,7 +247,7 @@ class Sandbox(SandboxProtocol):
                 "\n[Note: some variables could not be persisted]",
             )
 
-    def _make_initial_namespace(self) -> Dict[str, Any]:
+    def _make_initial_namespace(self) -> dict[str, Any]:
         allowed_builtins = {
             name: getattr(builtins, name)
             for name in self.config.authorized_builtins
@@ -267,15 +271,13 @@ class Sandbox(SandboxProtocol):
             and node.func.attr not in self.config.authorized_attributes
         ):
             return True
-        if (
+        return (
             isinstance(node, ast.Attribute)
             and node.attr.startswith("__")
             and node.attr not in self.config.authorized_attributes
-        ):
-            return True
-        return False
+        )
 
-    def _is_code_not_safe(self, code: str) -> Optional[str]:
+    def _is_code_not_safe(self, code: str) -> str | None:
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
@@ -332,16 +334,16 @@ class Sandbox(SandboxProtocol):
     def _worker(
         self,
         code: str,
-        namespace: Dict[str, Any],
-        namespace_save: Optional[bytes],
+        namespace: dict[str, Any],
+        namespace_save: bytes | None,
         queue: Queue[tuple[ExecutionResult, bytes]],
         temp_stderr: IO[str],
         temp_stdout: IO[str],
         tool_requests: Queue[Any],
         tool_responses: Queue[Any],
-        tool_names: List[str],
+        tool_names: list[str],
         generation_nb: int,
-        tool_param_names: Dict[str, List[str]],
+        tool_param_names: dict[str, list[str]],
     ) -> None:
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
@@ -401,60 +403,60 @@ class Sandbox(SandboxProtocol):
         queue.put((result, saved))
 
     def execute(self, code: str) -> ExecutionResult:
-        rslt_icns: Optional[str] = self._is_code_not_safe(code)
+        rslt_icns: str | None = self._is_code_not_safe(code)
         if rslt_icns:
             return ExecutionResult(error=rslt_icns, duration_ms=0.0)
 
         q: Queue[tuple[ExecutionResult, bytes]] = Queue()
-        temp_stderr: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
-        temp_stdout: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
-        self._tool_wait_total = 0.0
-        self.generation_nb += 1
-        p = Process(
-            target=self._worker,
-            args=(
-                code,
-                self._namespace,
-                self._namespace_save,
-                q,
-                temp_stderr,
-                temp_stdout,
-                self._tool_requests,
-                self._tool_responses,
-                self.tool_names,
-                self.generation_nb,
-                self._tool_param_names,
-            ),
-        )
-        result: ExecutionResult
-        namespace_bytes: Optional[bytes] = None
-        did_timeout: bool = False
-
-        p.start()
-        did_timeout = self._wait_for_worker(p)
-        try:
-            result, namespace_bytes = q.get(timeout=5)
-            self._namespace_save = namespace_bytes
-        except Empty:
-            namespace_bytes = None
-            result = ExecutionResult(
-                error=(
-                    "Error: Execution timed out."
-                    if did_timeout
-                    else "Error: Sandbox process died without returning "
-                    "a result."
+        with (
+            tempfile.TemporaryFile(mode="w+", buffering=1) as temp_stderr,
+            tempfile.TemporaryFile(mode="w+", buffering=1) as temp_stdout,
+        ):
+            self._tool_wait_total = 0.0
+            self.generation_nb += 1
+            p = Process(
+                target=self._worker,
+                args=(
+                    code,
+                    self._namespace,
+                    self._namespace_save,
+                    q,
+                    temp_stderr,
+                    temp_stdout,
+                    self._tool_requests,
+                    self._tool_responses,
+                    self.tool_names,
+                    self.generation_nb,
+                    self._tool_param_names,
                 ),
-                timed_out=did_timeout,
-                duration_ms=self.config.max_execution_time_seconds * 1000,
             )
-            result.stdout, result.stderr, result.truncated = (
-                self._get_stdout_stderr(temp_stdout, temp_stderr)
-            )
-        finally:
-            temp_stderr.close()
-            temp_stdout.close()
-            p.close()
-            q.close()
+            result: ExecutionResult
+            namespace_bytes: bytes | None = None
+            did_timeout: bool = False
+
+            p.start()
+            did_timeout = self._wait_for_worker(p)
+            try:
+                result, namespace_bytes = q.get(timeout=5)
+                self._namespace_save = namespace_bytes
+            except Empty:
+                namespace_bytes = None
+                result = ExecutionResult(
+                    error=(
+                        "Error: Execution timed out."
+                        if did_timeout
+                        else "Error: Sandbox process died without returning "
+                        "a result."
+                    ),
+                    timed_out=did_timeout,
+                    duration_ms=self.config.max_execution_time_seconds * 1000,
+                )
+                result.stdout, result.stderr, result.truncated = (
+                    self._get_stdout_stderr(temp_stdout, temp_stderr)
+                )
+            finally:
+                p.close()
+                q.close()
         return result
 
     def _wait_for_worker(self, p: Process) -> bool:
@@ -484,7 +486,7 @@ class Sandbox(SandboxProtocol):
         properties = schema.get("properties", {})
         required = set(schema.get("required", []))
 
-        params: List[Any] = []
+        params: list[Any] = []
         for name, prop in properties.items():
             param_type = prop.get("type", "unknown")
             required_str = " (required)" if name in required else ""

@@ -8,6 +8,7 @@ dependencies = [
     "httpx>=0.27",
     "python-dotenv>=1.0",
     "dill>=0.3",
+    "mcp-types>=2.0.0",
 ]
 
 [project.scripts]
@@ -25,3 +26,8 @@ packages = ["src", "schemas"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# The sandbox is an isolation boundary: it runs untrusted code and bridges
+# to an external MCP process, so broad `except Exception` is intentional.
+"src/sandbox.py" = ["BLE001", "S102"]
