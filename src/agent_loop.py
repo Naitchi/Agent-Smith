@@ -16,11 +16,11 @@ from schemas import (AUTHORIZED_GEMINI,
                      MaxOutputTokensError,
                      MaxWallTimeError,
                      OutputParameter,
+                     RELAIS_MODELE,
                      SigStopError,
                      SolutionOutput,
                      StepMetrics,
-                     extract_code,
-                     RELAIS_MODELE
+                     extract_code
                      )
 
 
@@ -64,6 +64,46 @@ def init_value() -> tuple[int, int, int]:
         res.get("total_request", 0),
     )
 
+
+# Le manuel de la sandbox est reemis a CHAQUE requete : sa taille est
+# multipliee par le nombre d'iterations. Celui de bclairot fait ~493 tokens,
+# dont l'essentiel dans les listes exhaustives d'imports/builtins/attributs.
+# On coupe les phrases les plus longues en premier : les courtes portent
+# l'information utile (limites, pas de reseau, persistance, final_answer).
+# Rien n'est hardcode sur le contenu -> compatible avec un serveur MCP inconnu.
+MAX_MANUAL_CHARS = 700
+
+
+def compact_manual(manual: str, max_chars: int = MAX_MANUAL_CHARS) -> str:
+    if len(manual) <= max_chars:
+        return manual
+    phrases = [f"{p.strip()}." for p in manual.split(". ") if p.strip()]
+    garde = list(phrases)
+    while garde and len(" ".join(garde)) > max_chars:
+        garde.remove(max(garde, key=len))
+    return " ".join(garde)
+
+# --- outillage de test du chemin 429 ---------------------------------------
+# Pilote par l'environnement : vide par defaut, donc inerte en production.
+#   FORCE_429_MODELS=gemini-3.5-flash          -> ce modele repond toujours 429
+#   FORCE_429_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash
+#   DEBUG_BASCULE=1                            -> trace les prompts et bascules
+FORCE_429_MODELS = {
+    m.strip() for m in os.environ.get("FORCE_429_MODELS", "").split(",") if m.strip()
+}
+DEBUG_BASCULE = os.environ.get("DEBUG_BASCULE", "") not in ("", "0")
+
+
+def _fake_429(api_url: str) -> httpx.HTTPStatusError:
+    """Un 429 identique en forme a celui d'un provider, sans appel reseau."""
+    request = httpx.Request("POST", api_url)
+    return httpx.HTTPStatusError(
+        "simulated 429 (FORCE_429_MODELS)",
+        request=request,
+        response=httpx.Response(429, request=request),
+    )
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -85,6 +125,14 @@ class AgentLoop:
                 "content": user_prompt
             }
         ]
+
+        # Le manuel des outils vient de la sandbox, il n'est jamais recopie a la
+        # main : le serveur MCP branche peut etre inconnu (cf. sujet). Compose
+        # une seule fois, l'appel est le meme a chaque tour.
+        self._prompt_systeme = self.agent_loop.system_prompt
+        manuel = self.agent_loop.sandbox.get_manual()
+        if manuel:
+            self._prompt_systeme += "\n\n" + compact_manual(manuel)
 
         steps: list[StepMetrics] = []
         total_input_tokens, total_output_token, total_request = init_value()
@@ -118,14 +166,17 @@ class AgentLoop:
                         try:
                             request_start = time.monotonic()
                             total_request += 1
-                            prompt_systeme = self.agent_loop.system_prompt
+                            prompt_systeme = self._prompt_systeme
                             if relais_en_attente:
                                 prompt_systeme += "\n\n" + relais_en_attente
-                            print("----------------TEST IF CHANGE MODEL prompt -----------------")
-                            print(f"Step {step} - Model: {self.agent_loop.model_name} - API URL: {self.agent_loop.api_url}")
-                            print(f"Prompt systeme:\n{prompt_systeme}\n")
-                            print("----------------TEST IF CHANGE MODEL prompt -----------------")
+                            if self.agent_loop.model_name in FORCE_429_MODELS:
+                                raise _fake_429(self.agent_loop.api_url)
                             result = self.agent_loop.llm(prompt_systeme, message)
+                            if DEBUG_BASCULE:
+                                print(f"[step {step}] {self.agent_loop.model_name} "
+                                      f"({self.agent_loop.api_url})")
+                                print(f"  prompt systeme : {prompt_systeme}")
+                                print(f"  reponse        : {result.text[:200]}")
                             relais_en_attente = None
                             current_context += result.text
                             request_conv_time = (time.monotonic() - request_start) * 1000
@@ -316,6 +367,6 @@ class AgentLoop:
             total_output_tokens=output_conf.total_output_tokens,
             total_time_seconds=time.monotonic() - output_conf.start,
             steps=output_conf.steps,
-            system_prompt=self.agent_loop.system_prompt,
+            system_prompt=getattr(self, "_prompt_systeme", self.agent_loop.system_prompt),
             error=output_conf.message,
         )

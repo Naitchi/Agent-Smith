@@ -156,7 +156,7 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
+    except (Exception, TimeoutError) as e:
         print(f"Erreur inattendue : {type(e).__name__}: {e}")
     finally:
         print("Fin du programme.")

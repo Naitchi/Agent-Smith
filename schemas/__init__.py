@@ -11,7 +11,8 @@ from .Error import (
 from .contract_model import ExecutionResult, LLMProtocole, SandboxProtocol
 from .agent_class_monitoring import AgentLoopConf, OutputParameter
 from .tools_agent import (extract_code, AUTHORIZED_GEMINI, AUTHORIZED_GROQ,
-                          AUTHORIZED_LLM, create_newcontext, RELAIS_MODELE)
+                          AUTHORIZED_LLM, create_newcontext, RELAIS_MODELE,
+                          SYSTEM_PROMPT_MBPP)
 from .llm_result import LLMResult
 from .llmclass import GEMINI_API_URL, GROQ_API_URL, GeminiLLM, GroqLLM
 from .mbpp_task_Input import MBPPTaskInput
@@ -49,5 +50,6 @@ __all__ = [
     "AUTHORIZED_GROQ",
     "AUTHORIZED_LLM",
     "create_newcontext",
-    "RELAIS_MODELE"
+    "RELAIS_MODELE",
+    "SYSTEM_PROMPT_MBPP"
 ]

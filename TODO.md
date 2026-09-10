@@ -153,8 +153,10 @@ Pour ne pas s'attendre l'un l'autre :
       à la correction. À neutraliser sur le chemin moulinette.
 - [ ] Le budget est vérifié **après** l'appel LLM → la limite de 6k tokens d'entrée peut être
       franchie avant d'être détectée (à traiter avec la troncature d'historique, §mobenais.3).
-- [ ] `sandbox.get_manual()` existe côté bclairot mais **n'est appelé nulle part** côté agent
-      (cf. §mobenais.4).
+- [x] ~~`sandbox.get_manual()` existe côté bclairot mais **n'est appelé nulle part** côté agent
+      (cf. §mobenais.4).~~ **Corrigé le 2026-09-10** : composé une fois avant la boucle dans
+      `AgentLoop.run()`, compacté par `compact_manual()` (493 → 153 tokens), et c'est le prompt
+      composé qui part dans `SolutionOutput.system_prompt`.
 - [x] ~~`SYSTEM_PROMPT` est rédigé en français alors qu'il exige des réponses en anglais.~~
       **Corrigé le 2026-09-09** : prompt entièrement en anglais (73 tokens). Le fond reste
       à écrire (cf. §mobenais.4).
@@ -223,16 +225,22 @@ Pour ne pas s'attendre l'un l'autre :
 
 ## mobenais.4 System prompts (fortement noté)
 
-> État : un seul `SYSTEM_PROMPT` de 5 lignes, en français, dans `schemas/tools_agent.py`.
-> Tout ce qui suit est à écrire.
+> État au 2026-09-10 : `SYSTEM_PROMPT_MBPP` écrit dans `schemas/tools_agent.py`
+> (280 tokens ; 434 une fois `get_manual()` compacté concaténé). Validé sur 3 tâches
+> MBPP, résolues en 2-3 itérations pour ~1300-2000 tokens d'entrée sur les 6000.
+> Restent : le prompt SWE-bench, et l'ablation vague vs explicite.
 
-- [ ] Doc des outils **injectée depuis `sandbox.get_manual()`** — jamais recopiée à la main
-      *(`get_manual()` n'est appelé nulle part dans `src/agent_loop.py`)*
-- [ ] Slots explicites : `Thought:` / `Code:` / `Observation:`
-      *(la boucle réinjecte bien `observation\n...` en message user, mais le prompt ne cadre rien)*
-- [ ] **Au moins un exemple complet** de boucle de raisonnement (few-shot)
-- [ ] Méthodologie de debug pas-à-pas : lire → chercher → hypothèse → éditer → tester
-- [ ] Prompt MBPP et prompt SWE-bench séparés
+- [x] Doc des outils **injectée depuis `sandbox.get_manual()`** — jamais recopiée à la main
+      *(`AgentLoop.run()` la concatène au prompt ; `compact_manual()` coupe les phrases les plus
+      longues d'abord, sans rien hardcoder sur le contenu → reste valide avec un serveur MCP inconnu)*
+- [x] Slots explicites : `Thought:` / `Code:` / `Observation:` *(cadrés par `SYSTEM_PROMPT_MBPP`, avec `<end_code>`)*
+- [x] **Au moins un exemple complet** de boucle de raisonnement (few-shot) *(2 tours, dans `SYSTEM_PROMPT_MBPP`)*
+- [~] Méthodologie de debug pas-à-pas : lire → chercher → hypothèse → éditer → tester
+      *(version MBPP faite : « imprime la valeur obtenue à côté de l'attendue, ne corrige que ce
+      que l'écart montre, ne réécris pas la fonction ». La version SWE-bench reste à écrire)*
+- [~] Prompt MBPP et prompt SWE-bench séparés
+      *(`SYSTEM_PROMPT_MBPP` écrit — 280 tokens, 434 avec le manuel compacté. Le prompt
+      SWE-bench n'existe pas)*
 - [ ] Comparaison empirique prompt vague vs prompt explicite (→ sert d'ablation §C.1)
 
 > ⚠️ **MBPP : 6 000 tokens d'entrée cumulés sur toute la tâche.** L'historique
@@ -241,16 +249,23 @@ Pour ne pas s'attendre l'un l'autre :
 
 ## mobenais.5 CLI agent MBPP
 
-> ⚠️ **Rien n'est commencé** : `src/agent_MBPP.py` est vide (0 octet, non commité).
-> `src/__main__.py` est un main de démo (tâche en dur, pas de `--task-file`, pas d'écriture
-> de `solution.json`). Sans ce CLI, `exam_mbpp.sh` ne peut pas tourner du tout.
+> État au 2026-09-10 : package `agent_mbpp/` créé à la racine (`python -m agent_mbpp`),
+> ajouté à `packages` dans `pyproject.toml`. Validé de bout en bout sur 3 tâches MBPP :
+> résolues en 2-3 itérations, 1300-2000 tokens d'entrée sur 6000, tests rejoués OK.
+> `src/agent_MBPP.py` (0 octet) est à supprimer.
 
-- [ ] `uv run python -m agent_mbpp --task-file ... --output ... --model-name ... --provider-url ...`
-- [ ] Clé API lue depuis l'environnement
-- [ ] Chargement `MBPPTaskInput`, lancement du serveur MCP MBPP (selon §0.5)
-- [ ] Écriture de `SolutionOutput` : `benchmark="mbpp"`, `solution` = code Python
-- [ ] Limites : **10 itérations / 6k in / 1.5k out / 120 s**
-- [ ] Objectif : **4/5**
+- [x] `uv run python -m agent_mbpp --task-file ... --output ... --model-name ... --provider-url ...`
+- [x] Clé API lue depuis l'environnement *(refus explicite si aucune clé, jamais en argument)*
+- [~] Chargement `MBPPTaskInput`, lancement du serveur MCP MBPP (selon §0.5)
+      *(chargement + validation Pydantic faits ; `start_mcp_server()` écrit bien
+      `cache/mbpp_task.json` mais ne lance pas le process — bloqué par le MCP non branché
+      côté sandbox, cf. §mobenais.0)*
+- [x] Écriture de `SolutionOutput` : `benchmark="mbpp"`, `solution` = code Python
+      *(le prompt exige `final_answer(<source>)` ; filet dans `main()` qui reprend le dernier
+      `sandbox_input` si la boucle s'arrête sans `final_answer`)*
+- [x] Limites : **10 itérations / 6k in / 1.5k out / 120 s** *(constantes en tête de
+      `agent_mbpp/__main__.py` ; les défauts d'`AgentLoopConf` restent hors sujet, cf. §mobenais.0)*
+- [ ] Objectif : **4/5** *(3/3 sur des tâches de test maison ; jamais passé sur `exam_mbpp.sh`)*
 
 ## mobenais.6 CLI agent SWE-bench
 
