@@ -30,4 +30,6 @@ testpaths = ["tests"]
 [tool.ruff.lint.per-file-ignores]
 # The sandbox is an isolation boundary: it runs untrusted code and bridges
 # to an external MCP process, so broad `except Exception` is intentional.
+# Same for mcp_tools_mbpp
 "src/sandbox.py" = ["BLE001", "S102"]
+"mcp_tools_mbpp.py" = ["BLE001", "S102"]
