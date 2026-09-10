@@ -50,6 +50,7 @@ class Sandbox(SandboxProtocol):
         )
         self._namespace: Dict[str, Any] = self._make_initial_namespace()
         self._namespace_save: Optional[bytes] = None
+        self.generation_nb: int = 0
         self._tools: List[Tool] = []
         if self.sync_client is not None:
             try:
@@ -135,24 +136,34 @@ class Sandbox(SandboxProtocol):
             item = self._tool_requests.get()
             if item is None:
                 break
-            name, kwargs = item
+            generation_nb, name, kwargs = item
+            if generation_nb < self.generation_nb:
+                continue
             try:
                 rslt = self.sync_client.use_tool(name, kwargs)
                 text = rslt.content[0].text if rslt.content else None
                 if rslt.is_error:
-                    self._tool_responses.put((False, text or "Tool error"))
+                    self._tool_responses.put(
+                        (generation_nb, False, text or "Tool error")
+                    )
                 else:
-                    self._tool_responses.put((True, text))
+                    self._tool_responses.put((generation_nb, True, text))
             except Exception as e:
-                self._tool_responses.put((False, str(e)))
+                self._tool_responses.put((generation_nb, False, str(e)))
 
+    # TODO mettre un nombre de sequensage si le code exec utilise des threads ?
     @staticmethod
     def _make_tool_proxy(
-        name: str, request_q: Queue[Any], response_q: Queue[Any]
+        name: str,
+        request_q: Queue[Any],
+        response_q: Queue[Any],
+        generation_nb: int,
     ) -> Callable[..., Any]:
         def proxy(**kwargs: Any) -> Any:
-            request_q.put((name, kwargs))
-            success, payload = response_q.get()
+            request_q.put((generation_nb, name, kwargs))
+            generation_nb_rslt, success, payload = response_q.get()
+            while generation_nb_rslt != generation_nb:
+                generation_nb_rslt, success, payload = response_q.get()
             if not success:
                 raise RuntimeError(
                     f"Tool '{name}' execution failed: {payload}"
@@ -259,6 +270,7 @@ class Sandbox(SandboxProtocol):
         tool_requests: Queue[Any],
         tool_responses: Queue[Any],
         tool_names: List[str],
+        generation_nb: int,
     ) -> None:
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
@@ -277,7 +289,7 @@ class Sandbox(SandboxProtocol):
 
         for name in tool_names:
             namespace[name] = self._make_tool_proxy(
-                name, tool_requests, tool_responses
+                name, tool_requests, tool_responses, generation_nb
             )
 
         start = time.time()
@@ -332,6 +344,7 @@ class Sandbox(SandboxProtocol):
         q: Queue[tuple[ExecutionResult, bytes]] = Queue()
         temp_stderr: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
         temp_stdout: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
+        self.generation_nb += 1
         p = Process(
             target=self._worker,
             args=(
@@ -344,6 +357,7 @@ class Sandbox(SandboxProtocol):
                 self._tool_requests,
                 self._tool_responses,
                 self.tool_names,
+                self.generation_nb,
             ),
         )
         result: ExecutionResult
@@ -414,8 +428,7 @@ class Sandbox(SandboxProtocol):
             f"{self.config.max_output_length} characters max output. "
             "No network access is allowed. "
             "Variables persist across execute() calls within the same session."
-            " Do not assume a clean namespace"
-            " after a failed execution. To clear the namespace."
+            " Do not assume a clean namespace after a failed execution."
             " You can use the final_answer(value) function to"
             " return a final answer from your code. But it must be a string "
             "or convertible to a string."
