@@ -7,20 +7,20 @@ result through an MCP ``run_tests`` tool over stdio or streamable HTTP.
 
 from __future__ import annotations
 
+import argparse
+import ast
+import json
+import signal
+import sys
+import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from multiprocessing import Process, Queue
+from queue import Empty
+from types import FrameType
+from typing import IO
+
 from mcp.server import MCPServer
 from pydantic import BaseModel
-from typing import IO, List
-from types import FrameType
-from queue import Empty
-
-import argparse
-import tempfile
-import signal
-import json
-import sys
-import ast
 
 from schemas.mbpp_task_Input import MBPPTaskInput
 
@@ -62,7 +62,7 @@ class ResultMBPPWorker(BaseModel):
         stderr: Text written to stderr by the candidate code (truncated).
     """
 
-    tests: List[ResultMBPPTest] = []
+    tests: list[ResultMBPPTest] = []
     stdout: str = ""
     stderr: str = ""
 
@@ -230,7 +230,7 @@ class MCPServerMBPP:
     def _run_tests(
         self,
         code: str,
-        test_list: List[str],
+        test_list: list[str],
         queue: Queue[ResultMBPPWorker],
         temp_stdout: IO[str],
         temp_stderr: IO[str],
@@ -291,7 +291,7 @@ class MCPServerMBPP:
         temp_stdout.close()
         queue.put(final_result)
 
-    def execute_test(self, code: str, test_list: List[str]) -> ResultMBPPTests:
+    def execute_test(self, code: str, test_list: list[str]) -> ResultMBPPTests:
         """Run the tests in a child process under a wall-clock timeout.
 
         Spawns :meth:`_run_tests`, waits up to ``timeout`` seconds, then
@@ -306,53 +306,53 @@ class MCPServerMBPP:
             worker crashed or timed out before producing a result.
         """
         q: Queue[ResultMBPPWorker] = Queue()
-        temp_stderr: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
-        temp_stdout: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
-        p = Process(
-            target=self._run_tests,
-            args=(
-                code,
-                test_list,
-                q,
-                temp_stdout,
-                temp_stderr,
-            ),
-        )
-        result_worker: ResultMBPPWorker = ResultMBPPWorker()
-
-        p.start()
-        p.join(timeout=self.timeout_timer)
-        if p.is_alive():
-            p.terminate()
-            p.join(timeout=1)
-            p.kill()
-        try:
-            result_worker = q.get(timeout=1)
-        except (TimeoutError, Empty):
-            stdout, stderr = self._get_stdout_stderr(temp_stdout, temp_stderr)
-            temp_stderr.close()
-            temp_stdout.close()
-            result = ResultMBPPTests(
-                success=False,
-                output=(
-                    "Process ended without producing a result (crash or"
-                    " timeout)"
+        with (
+            tempfile.TemporaryFile(mode="w+", buffering=1) as temp_stderr,
+            tempfile.TemporaryFile(mode="w+", buffering=1) as temp_stdout,
+        ):
+            p = Process(
+                target=self._run_tests,
+                args=(
+                    code,
+                    test_list,
+                    q,
+                    temp_stdout,
+                    temp_stderr,
                 ),
             )
-            if stdout:
-                result.output += f"\n---- stdout ----\n{stdout}\n"
-            if stderr:
-                result.output += f"\n---- stderr ----\n{stderr}\n"
-            return result
-        result_worker.stdout, result_worker.stderr = self._get_stdout_stderr(
-            temp_stdout, temp_stderr
-        )
-        temp_stderr.close()
-        temp_stdout.close()
+            result_worker: ResultMBPPWorker = ResultMBPPWorker()
+
+            p.start()
+            p.join(timeout=self.timeout_timer)
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=1)
+                p.kill()
+            try:
+                result_worker = q.get(timeout=1)
+            except (TimeoutError, Empty):
+                stdout, stderr = self._get_stdout_stderr(
+                    temp_stdout, temp_stderr
+                )
+                result = ResultMBPPTests(
+                    success=False,
+                    output=(
+                        "Process ended without producing a result (crash or"
+                        " timeout)"
+                    ),
+                )
+                if stdout:
+                    result.output += f"\n---- stdout ----\n{stdout}\n"
+                if stderr:
+                    result.output += f"\n---- stderr ----\n{stderr}\n"
+                return result
+            result_worker.stdout, result_worker.stderr = (
+                self._get_stdout_stderr(temp_stdout, temp_stderr)
+            )
         return self.change_to_final_result(result_worker, test_list)
 
     def change_to_final_result(
-        self, result_worker: ResultMBPPWorker, test_list: List[str]
+        self, result_worker: ResultMBPPWorker, test_list: list[str]
     ) -> ResultMBPPTests:
         """Fold raw worker results into the public ``run_tests`` result.
 

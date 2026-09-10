@@ -1,53 +1,104 @@
 from __future__ import annotations
 
-from contextlib import redirect_stdout, redirect_stderr
-import json
-from typing import Any, Callable, Dict, IO, Optional
-from multiprocessing import Process, Queue
-from types import FrameType
-from queue import Empty
-import tempfile
-import builtins
-import resource
 import argparse
+import ast
+import builtins
+import json
+import os
+import resource
 import signal
 import socket
-import types
-import dill
-import time
-import ast
 import sys
-import os
+import tempfile
+import threading
+import time
+import types
+from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
+from multiprocessing import Process, Queue
+from queue import Empty
+from types import FrameType
+from typing import IO, Any
 
-from schemas import ExecutionResult
-from schemas import SandboxConfig
+import dill
+from mcp_types import Tool
+
+from schemas import ExecutionResult, SandboxConfig
 from schemas.contract_model import SandboxProtocol
+from src.mcp_client import MCPClient
+from src.mcp_sync_client import SyncMCPClient
 
 
-class Sandbox:
+class Sandbox(SandboxProtocol):
     class _FinalAnswer(Exception):
         def __init__(self, value: Any) -> None:
             self.value = value
 
-    def __init__(self, config: SandboxConfig = SandboxConfig()) -> None:
-        self.config = config
-        self._namespace: Dict[str, Any] = self._make_initial_namespace()
-        self._namespace_save: Optional[bytes] = None
+    def __init__(
+        self,
+        url: str | None = None,
+        server_path: str | None = None,
+        config: SandboxConfig = None,
+    ) -> None:
+        if config:
+            self.config = config
+        else:
+            self.config = SandboxConfig()
+        self.mcp_client: MCPClient | None = (
+            MCPClient(url=url, server_path=server_path)
+            if (url or server_path)
+            else None
+        )
+        self.sync_client: SyncMCPClient | None = (
+            SyncMCPClient(self.mcp_client) if self.mcp_client else None
+        )
+        self._namespace: dict[str, Any] = self._make_initial_namespace()
+        self._namespace_save: bytes | None = None
+        self.generation_nb: int = 0
+        self._tools: list[Tool] = []
+        if self.sync_client is not None:
+            try:
+                self.sync_client.start()
+                self._tools = self.sync_client.get_tools_list()
+            except Exception as e:
+                print(
+                    f"Error occurred while fetching tools: {e}",
+                    file=sys.stderr,
+                )
+        self.tool_names: list[str] = [tool.name for tool in self._tools]
+        self._tool_param_names: dict[str, list[str]] = {
+            tool.name: list((tool.input_schema.get("properties") or {}).keys())
+            for tool in self._tools
+        }
+        self._tool_requests: Queue[Any] = Queue()
+        self._tool_responses: Queue[Any] = Queue()
+        self._tool_wait_total: float = 0.0
+        self._tool_active_since: float | None = None
+        self._tool_lock: threading.Lock = threading.Lock()
+        if self.tool_names:
+            self.bridge_thread = threading.Thread(
+                target=self._bridge_loop, daemon=True
+            )
+            self.bridge_thread.start()
 
     def _restricted_import(
         self,
         name: str,
-        globals: Dict[str, object] | None = None,
-        locals: Dict[str, object] | None = None,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> types.ModuleType:
         if "." in name:
             if f"{name.split('.')[0]}.*" not in self.config.authorized_imports:
-                raise ImportError(f"Import of module '{name}' is not allowed.")
+                raise ImportError(
+                    f"Error: Import of module '{name}' is not allowed."
+                )
         else:
             if name not in self.config.authorized_imports:
-                raise ImportError(f"Import of module '{name}' is not allowed.")
+                raise ImportError(
+                    f"Error: Import of module '{name}' is not allowed."
+                )
         module = builtins.__import__(name, globals, locals, fromlist, level)
         unauthorized: list[str] = []
         for from_name in fromlist or ():
@@ -60,7 +111,8 @@ class Sandbox:
                     unauthorized.append(sub_name)
         if unauthorized:
             raise ImportError(
-                f"Import of module/s {', '.join(unauthorized)} is not allowed."
+                f"Error: Import of module/s {', '.join(unauthorized)} "
+                "is not allowed."
             )
         return module
 
@@ -90,12 +142,112 @@ class Sandbox:
                     closefd,
                     opener,
                 )
-        raise PermissionError(f"Access to file '{file}' is not allowed.")
+        raise PermissionError(
+            f"Error: Access to file '{file}' is not allowed."
+        )
 
-    def _save_namespace(self, namespace: Dict[str, Any]) -> bytes:
-        return dill.dumps(namespace)
+    def _bridge_loop(self) -> None:
+        if self.sync_client is None:
+            return
 
-    def _make_initial_namespace(self) -> Dict[str, Any]:
+        while True:
+            item = self._tool_requests.get()
+            if item is None:
+                break
+            generation_nb, name, kwargs = item
+            if generation_nb < self.generation_nb:
+                continue
+            try:
+                with self._tool_lock:
+                    self._tool_active_since = time.monotonic()
+                rslt = self.sync_client.use_tool(name, kwargs)
+                text = rslt.content[0].text if rslt.content else None
+                if rslt.is_error:
+                    self._tool_responses.put(
+                        (generation_nb, False, text or "Tool error")
+                    )
+                else:
+                    self._tool_responses.put((generation_nb, True, text))
+            except Exception as e:
+                self._tool_responses.put((generation_nb, False, str(e)))
+            finally:
+                with self._tool_lock:
+                    self._tool_wait_total += (
+                        time.monotonic() - self._tool_active_since
+                    )
+                    self._tool_active_since = None
+
+    # TODO mettre un nombre de sequensage si le code exec utilise des threads ?
+    @staticmethod
+    def _make_tool_proxy(
+        name: str,
+        request_q: Queue[Any],
+        response_q: Queue[Any],
+        generation_nb: int,
+        tool_param_names: dict[str, list[str]],
+    ) -> Callable[..., Any]:
+        def proxy(*args: Any, **kwargs: Any) -> Any:
+            params: list[str] = tool_param_names.get(name, [])
+            if len(args) > len(params):
+                raise TypeError(f"Error: Too many args for {name}.")
+            args_kw = dict(zip(params, args))
+            if args_kw.keys() & kwargs.keys():
+                raise TypeError(
+                    f"Error: Multipule values for the same kw in {name}."
+                )
+            kwargs = {**args_kw, **kwargs}
+
+            request_q.put((generation_nb, name, kwargs))
+            generation_nb_rslt, success, payload = response_q.get()
+            while generation_nb_rslt != generation_nb:
+                generation_nb_rslt, success, payload = response_q.get()
+            if not success:
+                raise RuntimeError(
+                    f"Error: Tool '{name}' execution failed: {payload}"
+                )
+            return payload
+
+        return proxy
+
+    def _save_namespace(self, namespace: dict[str, Any]) -> bytes:
+        return dill.dumps(namespace, recurse=True)
+
+    @staticmethod
+    def _restore_namespace(
+        namespace: dict[str, Any], namespace_save: bytes
+    ) -> None:
+        namespace.update(dill.loads(namespace_save))
+        for key, value in list(namespace.items()):
+            if isinstance(value, types.FunctionType):
+                namespace[key] = types.FunctionType(
+                    value.__code__,
+                    namespace,
+                    value.__name__,
+                    value.__defaults__,
+                    value.__closure__,
+                )
+
+    def _persist_namespace(
+        self, namespace: dict[str, Any], tool_names: list[str]
+    ) -> tuple[bytes, str]:
+        live_keys = set(tool_names) | {
+            "final_answer",
+            "__builtins__",
+            "__name__",
+        }
+        persisted = {k: v for k, v in namespace.items() if k not in live_keys}
+        try:
+            return self._save_namespace(persisted), ""
+        except Exception:
+            pickable = {
+                k: v for k, v in persisted.items() if self._can_pickle(v)
+            }
+            return (
+                self._save_namespace(pickable),
+                "\n[Note: some variables could not be persisted]",
+            )
+
+    def _make_initial_namespace(self) -> dict[str, Any]:
         allowed_builtins = {
             name: getattr(builtins, name)
             for name in self.config.authorized_builtins
@@ -119,19 +271,17 @@ class Sandbox:
             and node.func.attr not in self.config.authorized_attributes
         ):
             return True
-        if (
+        return (
             isinstance(node, ast.Attribute)
             and node.attr.startswith("__")
             and node.attr not in self.config.authorized_attributes
-        ):
-            return True
-        return False
+        )
 
-    def _is_code_not_safe(self, code: str) -> bool:
+    def _is_code_not_safe(self, code: str) -> str | None:
         try:
             tree = ast.parse(code)
-        except SyntaxError:
-            return True
+        except SyntaxError as e:
+            return f"Error: SyntaxError in code: {e}"
 
         for node in ast.walk(tree):
             if (
@@ -140,8 +290,8 @@ class Sandbox:
             ) or isinstance(node, ast.Attribute):
                 node = self._check_disallowed_attributes(node)
                 if node:
-                    return True
-        return False
+                    return "Error: Code contains disallowed operations."
+        return None
 
     @staticmethod
     def _timeout_handler(signum: int, frame: FrameType | None) -> None:
@@ -166,19 +316,34 @@ class Sandbox:
 
     @staticmethod
     def _blocked_call(*args: Any, **kwargs: Any) -> None:
-        raise PermissionError("Network access is disabled in the sandbox.")
+        raise PermissionError(
+            "Error: Network access is disabled in the sandbox."
+        )
 
     def _final_answer(self, answer: Any) -> None:
         raise self._FinalAnswer(answer)
 
+    @staticmethod
+    def _can_pickle(value: Any) -> bool:
+        try:
+            dill.dumps(value, recurse=True)
+            return True
+        except Exception:
+            return False
+
     def _worker(
         self,
         code: str,
-        namespace: Dict[str, Any],
-        namespace_save: Optional[bytes],
+        namespace: dict[str, Any],
+        namespace_save: bytes | None,
         queue: Queue[tuple[ExecutionResult, bytes]],
         temp_stderr: IO[str],
         temp_stdout: IO[str],
+        tool_requests: Queue[Any],
+        tool_responses: Queue[Any],
+        tool_names: list[str],
+        generation_nb: int,
+        tool_param_names: dict[str, list[str]],
     ) -> None:
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
@@ -193,7 +358,16 @@ class Sandbox:
             (self.config.max_open_files, self.config.max_open_files),
         )
         if namespace_save is not None:
-            namespace.update(dill.loads(namespace_save))
+            self._restore_namespace(namespace, namespace_save)
+
+        for name in tool_names:
+            namespace[name] = self._make_tool_proxy(
+                name,
+                tool_requests,
+                tool_responses,
+                generation_nb,
+                tool_param_names,
+            )
 
         start = time.time()
         result = ExecutionResult()
@@ -208,13 +382,14 @@ class Sandbox:
                     "final_answer value could not be converted to string"
                 )
         except TimeoutError:
-            result.error = "Execution timed out."
+            result.error = "Error: Execution timed out."
             result.timed_out = True
             result.duration_ms = self.config.max_execution_time_seconds * 1000
         except MemoryError:
-            result.error = "Memory limit exceeded."
+            result.error = "Error: Memory limit exceeded."
         except Exception as e:
-            result.error = str(e)
+            msg = str(e)
+            result.error = msg if msg.startswith("Error:") else f"Error: {msg}"
 
         if not result.timed_out:
             result.duration_ms = (time.time() - start) * 1000
@@ -223,59 +398,110 @@ class Sandbox:
         )
         temp_stderr.close()
         temp_stdout.close()
-        queue.put((result, self._save_namespace(namespace)))
+        saved, note = self._persist_namespace(namespace, tool_names)
+        result.stderr += note
+        queue.put((result, saved))
 
     def execute(self, code: str) -> ExecutionResult:
+        rslt_icns: str | None = self._is_code_not_safe(code)
+        if rslt_icns:
+            return ExecutionResult(error=rslt_icns, duration_ms=0.0)
+
         q: Queue[tuple[ExecutionResult, bytes]] = Queue()
-        temp_stderr: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
-        temp_stdout: IO[str] = tempfile.TemporaryFile(mode="w+", buffering=1)
-        p = Process(
-            target=self._worker,
-            args=(
-                code,
-                self._namespace,
-                self._namespace_save,
-                q,
-                temp_stderr,
-                temp_stdout,
-            ),
-        )
-        result: ExecutionResult
-        namespace_bytes: Optional[bytes] = None
-
-        if self._is_code_not_safe(code):
-            return ExecutionResult(
-                error="Code contains disallowed operations."
+        with (
+            tempfile.TemporaryFile(mode="w+", buffering=1) as temp_stderr,
+            tempfile.TemporaryFile(mode="w+", buffering=1) as temp_stdout,
+        ):
+            self._tool_wait_total = 0.0
+            self.generation_nb += 1
+            p = Process(
+                target=self._worker,
+                args=(
+                    code,
+                    self._namespace,
+                    self._namespace_save,
+                    q,
+                    temp_stderr,
+                    temp_stdout,
+                    self._tool_requests,
+                    self._tool_responses,
+                    self.tool_names,
+                    self.generation_nb,
+                    self._tool_param_names,
+                ),
             )
+            result: ExecutionResult
+            namespace_bytes: bytes | None = None
+            did_timeout: bool = False
 
-        p.start()
-        p.join(timeout=self.config.max_execution_time_seconds)
-        if p.is_alive():
-            p.terminate()
-            p.join(timeout=1)
-            p.kill()
+            p.start()
+            did_timeout = self._wait_for_worker(p)
             try:
-                result, namespace_bytes = q.get(timeout=1)
+                result, namespace_bytes = q.get(timeout=5)
+                self._namespace_save = namespace_bytes
             except Empty:
                 namespace_bytes = None
                 result = ExecutionResult(
-                    error="Execution timed out.",
-                    timed_out=True,
+                    error=(
+                        "Error: Execution timed out."
+                        if did_timeout
+                        else "Error: Sandbox process died without returning "
+                        "a result."
+                    ),
+                    timed_out=did_timeout,
                     duration_ms=self.config.max_execution_time_seconds * 1000,
                 )
                 result.stdout, result.stderr, result.truncated = (
                     self._get_stdout_stderr(temp_stdout, temp_stderr)
                 )
-        else:
-            result, namespace_bytes = q.get()
-        if namespace_bytes is not None:
-            self._namespace_save = namespace_bytes
-        temp_stderr.close()
-        temp_stdout.close()
+            finally:
+                p.close()
+                q.close()
         return result
 
+    def _wait_for_worker(self, p: Process) -> bool:
+        offset: float = 0.0
+        start: float = time.monotonic()
+        while p.is_alive():
+            with self._tool_lock:
+                offset = self._tool_wait_total
+                if self._tool_active_since:
+                    offset += time.monotonic() - self._tool_active_since
+            if (
+                time.monotonic() - start
+            ) - offset >= self.config.max_execution_time_seconds:
+                break
+            p.join(timeout=0.1)
+        if p.is_alive():
+            p.terminate()
+            p.join(timeout=1)
+            p.kill()
+            p.join(timeout=1)
+            return True
+        return False
+
+    def _format_tool(self, tool: Tool) -> str:
+        description: str = ""
+        schema = tool.input_schema or {}
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+
+        params: list[Any] = []
+        for name, prop in properties.items():
+            param_type = prop.get("type", "unknown")
+            required_str = " (required)" if name in required else ""
+            params.append(f"{name}: {param_type}{required_str}")
+        signature = f"{tool.name}({', '.join(params)})"
+        if tool.description:
+            description = tool.description.split("\n\n", 1)[0]
+            description = description.replace("\n", " ").strip()
+        else:
+            description = "No description provided."
+        return f"{signature} - {description}"
+
     def get_manual(self) -> str:
-        return (
+        tools_section: str = ""
+        base: str = (
             f"Manual for the sandbox environment. "
             f"{self.config.max_execution_time_seconds} seconds max "
             f"execution time, {self.config.max_memory_mb} MB max memory. "
@@ -285,17 +511,28 @@ class Sandbox:
             f"Authorized file path: {self.config.allowed_directories}. "
             f"{self.config.max_output_length} characters max output. "
             "No network access is allowed. "
-            "Variables persist across execute() calls within the same session "
-            "(like a REPL/notebook cell). Do not assume a clean namespace"
-            " after a failed execution. To clear the namespace, call the "
-            "close() method. You can use the final_answer(value) function to"
+            "Variables persist across execute() calls within the same session."
+            " Do not assume a clean namespace after a failed execution."
+            " You can use the final_answer(value) function to"
             " return a final answer from your code. But it must be a string "
             "or convertible to a string."
         )
+        if self._tools:
+            tools_section = (
+                " Available MCP tools (call them directly as "
+                "Python functions with keyword arguments):\n"
+            )
+            for tool in self._tools:
+                tools_section += f"  - {self._format_tool(tool)}\n"
+
+        return f"{base}\n\n{tools_section}"
 
     def close(self) -> None:
-        self._namespace = self._make_initial_namespace()
-        self._namespace_save = None
+        if self.tool_names:
+            self._tool_requests.put(None)
+            self.bridge_thread.join(timeout=1)
+        if self.sync_client is not None:
+            self.sync_client.stop()
 
 
 def main() -> None:
@@ -325,9 +562,11 @@ def main() -> None:
         except Exception as e:
             print(f"Error loading config: {e}", file=sys.stderr)
             return
-        sandbox = Sandbox(config)
+        sandbox = Sandbox(
+            config=config, server_path=args.mcp_stdio, url=args.mcp_server
+        )
     else:
-        sandbox = Sandbox()
+        sandbox = Sandbox(server_path=args.mcp_stdio, url=args.mcp_server)
     try:
         # TODO voir pour tester avec du code avec des fonctions de plusieurs
         # lignes avec codeop ? ou code.InteractiveConsole ?
@@ -340,11 +579,10 @@ def main() -> None:
             line_of_code = input(">>>")
             if line_of_code.strip() == "exit":
                 raise KeyboardInterrupt
-            elif line_of_code.strip() == "reset":
-                sandbox.close()
-                print("\nSandbox namespace has been reset.")
             print(sandbox.execute(line_of_code), "\n")
     except (KeyboardInterrupt, EOFError):
         print("\nExiting.")
     except Exception as e:
         print(f"\nError in sandbox: {e}", file=sys.stderr)
+    finally:
+        sandbox.close()
