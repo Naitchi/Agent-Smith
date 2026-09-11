@@ -285,12 +285,13 @@ class Sandbox(SandboxProtocol):
 
         for node in ast.walk(tree):
             if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-            ) or isinstance(node, ast.Attribute):
-                node = self._check_disallowed_attributes(node)
-                if node:
-                    return "Error: Code contains disallowed operations."
+                (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                )
+                or isinstance(node, ast.Attribute)
+            ) and self._check_disallowed_attributes(node):
+                return "Error: Code contains disallowed operations."
         return None
 
     @staticmethod
@@ -369,7 +370,7 @@ class Sandbox(SandboxProtocol):
                 tool_param_names,
             )
 
-        start = time.time()
+        start = time.monotonic()
         result = ExecutionResult()
         try:
             with redirect_stdout(temp_stdout), redirect_stderr(temp_stderr):
@@ -392,7 +393,7 @@ class Sandbox(SandboxProtocol):
             result.error = msg if msg.startswith("Error:") else f"Error: {msg}"
 
         if not result.timed_out:
-            result.duration_ms = (time.time() - start) * 1000
+            result.duration_ms = (time.monotonic() - start) * 1000
         result.stdout, result.stderr, result.truncated = (
             self._get_stdout_stderr(temp_stdout, temp_stderr)
         )
