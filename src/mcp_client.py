@@ -1,59 +1,47 @@
-from mcp import Client, StdioServerParameters, stdio_client
-from typing import Any, Dict, Optional
-from functools import wraps
-
 import sys
+from typing import Any
 
-
-def guarded(action: str):
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(self, *args, **kwargs):
-            try:
-                if not self.client or not self.connected:
-                    raise RuntimeError(f"No client available to {action}.")
-                return await func(self, *args, **kwargs)
-            except Exception as e:
-                print(f"Failed to {action}: {e}", file=sys.stderr)
-                raise
-
-        return wrapper
-
-    return decorator
+from mcp import (
+    Client,
+    GetPromptResult,
+    StdioServerParameters,
+    Tool,
+    stdio_client,
+)
+from mcp_types import (
+    BlobResourceContents,
+    CallToolResult,
+    Prompt,
+    Resource,
+    TextResourceContents,
+)
 
 
 class MCPClient:
     def __init__(
         self,
-        server_path: Optional[str] = "./mcp_tools_mbpp.py",
-        url: Optional[str] = None,
+        server_path: str | None = None,
+        url: str | None = None,
     ) -> None:
         self.url = url
         self.server_path = server_path
-        self.client: Optional[Client] = self.build_client()
+        self.client: Client = self.build_client()
         self.connected = False
 
-    def build_client(self):
-        try:
-            params: Optional[Any] = None
-            if (self.url is None) and self.server_path:
-                server = StdioServerParameters(
-                    command="python", args=[self.server_path]
-                )
-                params = stdio_client(server)
-            elif self.url:
-                params = self.url
-            else:
-                raise ValueError("Either url or server_path must be provided.")
-        except ValueError as e:
-            print(f"Error building client: {e}", file=sys.stderr)
-            return None
+    def build_client(self) -> Client:
+        params: Any | None = None
+        if (self.url is None) and self.server_path:
+            server = StdioServerParameters(
+                command="python", args=[self.server_path]
+            )
+            params = stdio_client(server)
+        elif self.url:
+            params = self.url
+        else:
+            raise ValueError("Either url or server_path must be provided.")
         return Client(params)
 
     async def connect(self):
-        if not self.client:
-            print("No client to connect.", file=sys.stderr)
-            return
         try:
             if self.connected:
                 raise RuntimeError("Already connected to the MCP server.")
@@ -73,40 +61,42 @@ class MCPClient:
             print(f"Failed to connect to the MCP server: {e}", file=sys.stderr)
             raise
 
-    @guarded("get tools list")
-    async def get_tools_list(self):
-        return (await self.client.list_tools()).tools
+    def _require_client(self) -> Client:
+        if not self.connected:
+            raise RuntimeError("Not connected to the MCP server.")
+        return self.client
 
-    @guarded("use tool")
+    async def get_tools_list(self) -> list[Tool]:
+        client = self._require_client()
+        return (await client.list_tools()).tools
+
     async def use_tool(
-        self, tool_name: str, params: Optional[Dict[str, Any]] = None
-    ):
-        return await self.client.call_tool(tool_name, params or {})
+        self, tool_name: str, params: dict[str, Any] | None = None
+    ) -> CallToolResult:
+        client = self._require_client()
+        return await client.call_tool(tool_name, params or {})
 
-    @guarded("get resources list")
-    async def get_resources_list(self):
-        return (await self.client.list_resources()).resources
+    async def get_resources_list(self) -> list[Resource]:
+        client = self._require_client()
+        return (await client.list_resources()).resources
 
-    @guarded("get resource")
-    async def get_resource(self, uri: str):
-        return (await self.client.read_resource(uri)).contents
+    async def get_resource(
+        self, uri: str
+    ) -> list[TextResourceContents | BlobResourceContents]:
+        client = self._require_client()
+        return (await client.read_resource(uri)).contents
 
-    @guarded("get prompt list")
-    async def get_prompt_list(self):
-        return (await self.client.list_prompts()).prompts
+    async def get_prompt_list(self) -> list[Prompt]:
+        client = self._require_client()
+        return (await client.list_prompts()).prompts
 
-    @guarded("get prompt")
     async def get_prompt(
-        self, prompt_name: str, arguments: Optional[Dict[str, Any]] = None
-    ):
-        return await self.client.get_prompt(
-            prompt_name, arguments=arguments or {}
-        )
+        self, prompt_name: str, arguments: dict[str, Any] | None = None
+    ) -> GetPromptResult:
+        client = self._require_client()
+        return await client.get_prompt(prompt_name, arguments=arguments or {})
 
-    async def disconnect(self):
-        if not self.client:
-            print("No client to disconnect.", file=sys.stderr)
-            return
+    async def disconnect(self) -> None:
         try:
             if not self.connected:
                 raise RuntimeError("Already disconnected from the MCP server.")

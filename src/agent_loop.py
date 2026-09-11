@@ -65,12 +65,8 @@ def init_value() -> tuple[int, int, int]:
     )
 
 
-# Le manuel de la sandbox est reemis a CHAQUE requete : sa taille est
-# multipliee par le nombre d'iterations. Celui de bclairot fait ~493 tokens,
-# dont l'essentiel dans les listes exhaustives d'imports/builtins/attributs.
-# On coupe les phrases les plus longues en premier : les courtes portent
-# l'information utile (limites, pas de reseau, persistance, final_answer).
-# Rien n'est hardcode sur le contenu -> compatible avec un serveur MCP inconnu.
+
+
 MAX_MANUAL_CHARS = 700
 
 
@@ -83,11 +79,6 @@ def compact_manual(manual: str, max_chars: int = MAX_MANUAL_CHARS) -> str:
         garde.remove(max(garde, key=len))
     return " ".join(garde)
 
-# --- outillage de test du chemin 429 ---------------------------------------
-# Pilote par l'environnement : vide par defaut, donc inerte en production.
-#   FORCE_429_MODELS=gemini-3.5-flash          -> ce modele repond toujours 429
-#   FORCE_429_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash
-#   DEBUG_BASCULE=1                            -> trace les prompts et bascules
 FORCE_429_MODELS = {
     m.strip() for m in os.environ.get("FORCE_429_MODELS", "").split(",") if m.strip()
 }
@@ -126,9 +117,6 @@ class AgentLoop:
             }
         ]
 
-        # Le manuel des outils vient de la sandbox, il n'est jamais recopie a la
-        # main : le serveur MCP branche peut etre inconnu (cf. sujet). Compose
-        # une seule fois, l'appel est le meme a chaque tour.
         self._prompt_systeme = self.agent_loop.system_prompt
         manuel = self.agent_loop.sandbox.get_manual()
         if manuel:
