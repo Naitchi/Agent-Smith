@@ -27,10 +27,6 @@ from schemas import (
 
 from src.agent_loop import AgentLoop
 
-# --------------------------------------------------------------------------
-# Limites MBPP du sujet. Elles ne sont PAS negociables : la moulinette
-# recalcule les totaux depuis les StepMetrics et refuse un depassement.
-# --------------------------------------------------------------------------
 MAX_ITERATIONS = 10
 MAX_INPUT_TOKENS = 6_000
 MAX_OUTPUT_TOKENS = 1_500
@@ -142,11 +138,6 @@ def main() -> int:
         )
     finally:
         conf.sandbox.close()
-
-    # SYSTEM_PROMPT_MBPP exige final_answer(<source de la fonction>), donc
-    # out.solution contient deja le code. Filet de securite : si la boucle
-    # s'arrete sans final_answer (max_iterations, budget), on reprend le
-    # dernier bloc de code effectivement execute (TODO mobenais.3).
     if not out.solution:
         for step in reversed(out.steps):
             if step.sandbox_input:
