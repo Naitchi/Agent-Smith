@@ -32,7 +32,11 @@ class MCPClient:
     def build_client(self) -> Client:
         params: Any | None = None
         if (self.url is None) and self.command_stdio:
-            command, *args = split(self.command_stdio)
+            try:
+                command, *args = split(self.command_stdio)
+            except Exception as e:
+                print(f"Error splitting command_stdio: {e}", file=sys.stderr)
+                raise
             server = StdioServerParameters(command=command, args=args)
             params = stdio_client(server)
         elif self.url:

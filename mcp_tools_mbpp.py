@@ -404,12 +404,16 @@ class MCPServerMBPP:
                 if test.error:
                     final_result.output += f"{test.error}\n"
                 break
-        if final_result.success and len(test_list) > 0:
+
+        if final_result.success:
             final_result.output += (
-                f"Test {len(result_worker.tests)}/{len(test_list)} passed!\n"
+                "No tests to run.\n"
+                if len(test_list) == 0
+                else (
+                    f"Test {len(result_worker.tests)}/{len(test_list)} "
+                    "passed!\n"
+                )
             )
-        elif final_result.success and len(test_list) == 0:
-            final_result.output += "No tests to run.\n"
         if result_worker.stdout:
             final_result.output += (
                 f"---- stdout ----\n{result_worker.stdout}\n"
