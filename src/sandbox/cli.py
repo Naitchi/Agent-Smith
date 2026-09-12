@@ -38,10 +38,10 @@ def main() -> None:
             print(f"Error loading config: {e}", file=sys.stderr)
             return
         sandbox = Sandbox(
-            config=config, server_path=args.mcp_stdio, url=args.mcp_server
+            config=config, command_stdio=args.mcp_stdio, url=args.mcp_server
         )
     else:
-        sandbox = Sandbox(server_path=args.mcp_stdio, url=args.mcp_server)
+        sandbox = Sandbox(command_stdio=args.mcp_stdio, url=args.mcp_server)
     try:
         # TODO voir pour tester avec du code avec des fonctions de plusieurs
         # lignes avec codeop ? ou code.InteractiveConsole ?

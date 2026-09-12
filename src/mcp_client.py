@@ -1,4 +1,5 @@
 import sys
+from shlex import split
 from typing import Any
 
 from mcp import (
@@ -20,25 +21,24 @@ from mcp_types import (
 class MCPClient:
     def __init__(
         self,
-        server_path: str | None = None,
+        command_stdio: str | None = None,
         url: str | None = None,
     ) -> None:
         self.url = url
-        self.server_path = server_path
+        self.command_stdio = command_stdio
         self.client: Client = self.build_client()
         self.connected = False
 
     def build_client(self) -> Client:
         params: Any | None = None
-        if (self.url is None) and self.server_path:
-            server = StdioServerParameters(
-                command="python", args=[self.server_path]
-            )
+        if (self.url is None) and self.command_stdio:
+            command, *args = split(self.command_stdio)
+            server = StdioServerParameters(command=command, args=args)
             params = stdio_client(server)
         elif self.url:
             params = self.url
         else:
-            raise ValueError("Either url or server_path must be provided.")
+            raise ValueError("Either url or command_stdio must be provided.")
         return Client(params)
 
     async def connect(self):

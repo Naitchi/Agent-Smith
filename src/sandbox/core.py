@@ -38,7 +38,7 @@ class Sandbox(
     def __init__(
         self,
         url: str | None = None,
-        server_path: str | None = None,
+        command_stdio: str | None = None,
         config: SandboxConfig = None,
     ) -> None:
         if config:
@@ -46,8 +46,8 @@ class Sandbox(
         else:
             self.config = SandboxConfig()
         self.mcp_client: MCPClient | None = (
-            MCPClient(url=url, server_path=server_path)
-            if (url or server_path)
+            MCPClient(url=url, command_stdio=command_stdio)
+            if (url or command_stdio)
             else None
         )
         self.sync_client: SyncMCPClient | None = (
