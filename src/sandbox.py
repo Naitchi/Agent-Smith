@@ -21,7 +21,8 @@ from types import FrameType
 from typing import IO, Any
 
 import dill
-from mcp_types import Tool
+from mcp import MCPError
+from mcp_types import BlobResourceContents, TextResourceContents, Tool
 
 from schemas import ExecutionResult, SandboxConfig
 from schemas.contract_model import SandboxProtocol
@@ -62,7 +63,7 @@ class Sandbox(SandboxProtocol):
                 self._tools = self.sync_client.get_tools_list()
             except Exception as e:
                 print(
-                    f"Error occurred while fetching tools: {e}",
+                    f"Error while fetching tools: {e}",
                     file=sys.stderr,
                 )
         self.tool_names: list[str] = [tool.name for tool in self._tools]
@@ -70,16 +71,95 @@ class Sandbox(SandboxProtocol):
             tool.name: list((tool.input_schema.get("properties") or {}).keys())
             for tool in self._tools
         }
-        self._tool_requests: Queue[Any] = Queue()
-        self._tool_responses: Queue[Any] = Queue()
-        self._tool_wait_total: float = 0.0
-        self._tool_active_since: float | None = None
-        self._tool_lock: threading.Lock = threading.Lock()
-        if self.tool_names:
+        self._mcp_requests: Queue[Any] = Queue()
+        self._mcp_responses: Queue[Any] = Queue()
+        self._mcp_wait_total: float = 0.0
+        self._mcp_active_since: float | None = None
+        self._mcp_lock: threading.Lock = threading.Lock()
+        if self.sync_client:
             self.bridge_thread = threading.Thread(
                 target=self._bridge_loop, daemon=True
             )
             self.bridge_thread.start()
+
+    @staticmethod
+    def proxy_list_resources(
+        request_q: Queue[Any],
+        response_q: Queue[Any],
+        generation_nb: int,
+    ) -> list[str]:
+        def list_resources() -> list[str]:
+            request_q.put((generation_nb, "list_resources", None, None))
+            generation_nb_rslt, success, payload = response_q.get()
+            while generation_nb_rslt != generation_nb:
+                generation_nb_rslt, success, payload = response_q.get()
+            if not success:
+                raise RuntimeError(
+                    f"Error: Couldnt list resources. "
+                    f"Execution failed: {payload}"
+                )
+            return payload
+
+        return list_resources
+
+    @staticmethod
+    def proxy_get_resource(
+        request_q: Queue[Any],
+        response_q: Queue[Any],
+        generation_nb: int,
+    ) -> callable[[str], bytes]:
+        def get_resource(resource_name: str) -> bytes:
+            request_q.put((generation_nb, "get_resource", resource_name, None))
+            generation_nb_rslt, success, payload = response_q.get()
+            while generation_nb_rslt != generation_nb:
+                generation_nb_rslt, success, payload = response_q.get()
+            if not success:
+                raise RuntimeError(
+                    f"Error: Couldnt get resource '{resource_name}'"
+                    f". Execution failed: {payload}"
+                )
+            return payload
+
+        return get_resource
+
+    @staticmethod
+    def proxy_list_prompts(
+        request_q: Queue[Any],
+        response_q: Queue[Any],
+        generation_nb: int,
+    ) -> callable[[], list[str]]:
+        def list_prompts() -> list[str]:
+            request_q.put((generation_nb, "list_prompts", None, None))
+            generation_nb_rslt, success, payload = response_q.get()
+            while generation_nb_rslt != generation_nb:
+                generation_nb_rslt, success, payload = response_q.get()
+            if not success:
+                raise RuntimeError(
+                    f"Error: Couldnt list prompts. Execution failed: {payload}"
+                )
+            return payload
+
+        return list_prompts
+
+    @staticmethod
+    def proxy_get_prompt(
+        request_q: Queue[Any],
+        response_q: Queue[Any],
+        generation_nb: int,
+    ) -> callable[[str], str]:
+        def get_prompt(prompt_name: str) -> str:
+            request_q.put((generation_nb, "get_prompt", prompt_name, None))
+            generation_nb_rslt, success, payload = response_q.get()
+            while generation_nb_rslt != generation_nb:
+                generation_nb_rslt, success, payload = response_q.get()
+            if not success:
+                raise RuntimeError(
+                    f"Error: Couldnt get prompt '{prompt_name}'."
+                    f" Execution failed: {payload}"
+                )
+            return payload
+
+        return get_prompt
 
     def _restricted_import(
         self,
@@ -111,8 +191,8 @@ class Sandbox(SandboxProtocol):
                     unauthorized.append(sub_name)
         if unauthorized:
             raise ImportError(
-                f"Error: Import of module/s {', '.join(unauthorized)} "
-                "is not allowed."
+                "Error: Import of module/s "
+                f"{', '.join(unauthorized)} is not allowed."
             )
         return module
 
@@ -151,33 +231,62 @@ class Sandbox(SandboxProtocol):
             return
 
         while True:
-            item = self._tool_requests.get()
+            item = self._mcp_requests.get()
             if item is None:
                 break
-            generation_nb, name, kwargs = item
+            generation_nb, mcp_function, name, kwargs = item
             if generation_nb < self.generation_nb:
                 continue
             try:
-                with self._tool_lock:
-                    self._tool_active_since = time.monotonic()
+                with self._mcp_lock:
+                    self._mcp_active_since = time.monotonic()
+                success, payload = self._execute_mcp_call(
+                    mcp_function, name, kwargs
+                )
+                self._mcp_responses.put((generation_nb, success, payload))
+            except MCPError as e:
+                self._mcp_responses.put((generation_nb, False, str(e)))
+            except Exception as e:
+                self._mcp_responses.put((generation_nb, False, str(e)))
+            finally:
+                with self._mcp_lock:
+                    self._mcp_wait_total += (
+                        time.monotonic() - self._mcp_active_since
+                    )
+                    self._mcp_active_since = None
+
+    def _execute_mcp_call(
+        self, mcp_function: str, name: str, kwargs: dict[str, Any]
+    ) -> tuple[bool, Any]:
+        match mcp_function:
+            case "use_tool":
                 rslt = self.sync_client.use_tool(name, kwargs)
                 text = rslt.content[0].text if rslt.content else None
                 if rslt.is_error:
-                    self._tool_responses.put(
-                        (generation_nb, False, text or "Tool error")
-                    )
-                else:
-                    self._tool_responses.put((generation_nb, True, text))
-            except Exception as e:
-                self._tool_responses.put((generation_nb, False, str(e)))
-            finally:
-                with self._tool_lock:
-                    self._tool_wait_total += (
-                        time.monotonic() - self._tool_active_since
-                    )
-                    self._tool_active_since = None
+                    return False, text or "Tool error"
+                return True, text
+            case "list_resources":
+                return True, self.sync_client.get_resources_list()
+            case "list_prompts":
+                return True, self.sync_client.get_prompt_list()
+            case "get_resource":
+                content = self.sync_client.get_resource(name)[0]
+                return True, self._extract_resource_text(content)
+            case "get_prompt":
+                return True, str(self.sync_client.get_prompt(name).messages)
+            case _:
+                return False, f"Error: Unknown MCP operation '{mcp_function}'."
 
-    # TODO mettre un nombre de sequensage si le code exec utilise des threads ?
+    @staticmethod
+    def _extract_resource_text(
+        content: TextResourceContents | BlobResourceContents,
+    ) -> str | None:
+        if isinstance(content, TextResourceContents):
+            return content.text
+        if isinstance(content, BlobResourceContents):
+            return content.blob
+        return None
+
     @staticmethod
     def _make_tool_proxy(
         name: str,
@@ -197,7 +306,7 @@ class Sandbox(SandboxProtocol):
                 )
             kwargs = {**args_kw, **kwargs}
 
-            request_q.put((generation_nb, name, kwargs))
+            request_q.put((generation_nb, "use_tool", name, kwargs))
             generation_nb_rslt, success, payload = response_q.get()
             while generation_nb_rslt != generation_nb:
                 generation_nb_rslt, success, payload = response_q.get()
@@ -230,11 +339,20 @@ class Sandbox(SandboxProtocol):
     def _persist_namespace(
         self, namespace: dict[str, Any], tool_names: list[str]
     ) -> tuple[bytes, str]:
-        live_keys = set(tool_names) | {
-            "final_answer",
-            "__builtins__",
-            "__name__",
-        }
+        live_keys = (
+            set(tool_names)
+            | {
+                "list_resources",
+                "get_resource",
+                "list_prompts",
+                "get_prompt",
+            }
+            | {
+                "final_answer",
+                "__builtins__",
+                "__name__",
+            }
+        )
         persisted = {k: v for k, v in namespace.items() if k not in live_keys}
         try:
             return self._save_namespace(persisted), ""
@@ -369,36 +487,59 @@ class Sandbox(SandboxProtocol):
                 generation_nb,
                 tool_param_names,
             )
+        if self.mcp_client:
+            namespace["list_resources"] = self.proxy_list_resources(
+                tool_requests,
+                tool_responses,
+                generation_nb,
+            )
+            namespace["get_resource"] = self.proxy_get_resource(
+                tool_requests,
+                tool_responses,
+                generation_nb,
+            )
+            namespace["list_prompts"] = self.proxy_list_prompts(
+                tool_requests,
+                tool_responses,
+                generation_nb,
+            )
+            namespace["get_prompt"] = self.proxy_get_prompt(
+                tool_requests,
+                tool_responses,
+                generation_nb,
+            )
 
         start = time.monotonic()
         result = ExecutionResult()
-        try:
-            with redirect_stdout(temp_stdout), redirect_stderr(temp_stderr):
-                exec(code, namespace)
-        except self._FinalAnswer as fa:
+        with redirect_stdout(temp_stdout), redirect_stderr(temp_stderr):
             try:
-                result.final_answer = str(fa.value)
-            except Exception:
-                result.final_answer = (
-                    "final_answer value could not be converted to string"
+                exec(code, namespace)
+            except self._FinalAnswer as fa:
+                try:
+                    result.final_answer = str(fa.value)
+                except Exception:
+                    result.final_answer = (
+                        "final_answer value could not be converted to string"
+                    )
+            except TimeoutError:
+                result.error = "Error: Execution timed out."
+                result.timed_out = True
+                result.duration_ms = (
+                    self.config.max_execution_time_seconds * 1000
                 )
-        except TimeoutError:
-            result.error = "Error: Execution timed out."
-            result.timed_out = True
-            result.duration_ms = self.config.max_execution_time_seconds * 1000
-        except MemoryError:
-            result.error = "Error: Memory limit exceeded."
-        except Exception as e:
-            msg = str(e)
-            result.error = msg if msg.startswith("Error:") else f"Error: {msg}"
+            except MemoryError:
+                result.error = "Error: Memory limit exceeded."
+            except Exception as e:
+                msg = str(e)
+                result.error = (
+                    msg if msg.startswith("Error:") else f"Error: {msg}"
+                )
 
-        if not result.timed_out:
-            result.duration_ms = (time.monotonic() - start) * 1000
-        result.stdout, result.stderr, result.truncated = (
-            self._get_stdout_stderr(temp_stdout, temp_stderr)
-        )
-        temp_stderr.close()
-        temp_stdout.close()
+            if not result.timed_out:
+                result.duration_ms = (time.monotonic() - start) * 1000
+            result.stdout, result.stderr, result.truncated = (
+                self._get_stdout_stderr(temp_stdout, temp_stderr)
+            )
         saved, note = self._persist_namespace(namespace, tool_names)
         result.stderr += note
         queue.put((result, saved))
@@ -413,7 +554,7 @@ class Sandbox(SandboxProtocol):
             tempfile.TemporaryFile(mode="w+", buffering=1) as temp_stderr,
             tempfile.TemporaryFile(mode="w+", buffering=1) as temp_stdout,
         ):
-            self._tool_wait_total = 0.0
+            self._mcp_wait_total = 0.0
             self.generation_nb += 1
             p = Process(
                 target=self._worker,
@@ -424,8 +565,8 @@ class Sandbox(SandboxProtocol):
                     q,
                     temp_stderr,
                     temp_stdout,
-                    self._tool_requests,
-                    self._tool_responses,
+                    self._mcp_requests,
+                    self._mcp_responses,
                     self.tool_names,
                     self.generation_nb,
                     self._tool_param_names,
@@ -446,8 +587,10 @@ class Sandbox(SandboxProtocol):
                     error=(
                         "Error: Execution timed out."
                         if did_timeout
-                        else "Error: Sandbox process died without returning "
-                        "a result."
+                        else (
+                            "Error: Sandbox process died"
+                            " without returning a result."
+                        )
                     ),
                     timed_out=did_timeout,
                     duration_ms=self.config.max_execution_time_seconds * 1000,
@@ -464,10 +607,10 @@ class Sandbox(SandboxProtocol):
         offset: float = 0.0
         start: float = time.monotonic()
         while p.is_alive():
-            with self._tool_lock:
-                offset = self._tool_wait_total
-                if self._tool_active_since:
-                    offset += time.monotonic() - self._tool_active_since
+            with self._mcp_lock:
+                offset = self._mcp_wait_total
+                if self._mcp_active_since:
+                    offset += time.monotonic() - self._mcp_active_since
             if (
                 time.monotonic() - start
             ) - offset >= self.config.max_execution_time_seconds:
@@ -525,12 +668,18 @@ class Sandbox(SandboxProtocol):
             )
             for tool in self._tools:
                 tools_section += f"  - {self._format_tool(tool)}\n"
+        if self.mcp_client:
+            tools_section += (
+                " You can use list_resources(), get_resource(uri), "
+                "list_prompts(), and get_prompt(name) to access more"
+                " data from the MCP server."
+            )
 
         return f"{base}\n\n{tools_section}"
 
     def close(self) -> None:
-        if self.tool_names:
-            self._tool_requests.put(None)
+        if self.mcp_client:
+            self._mcp_requests.put(None)
             self.bridge_thread.join(timeout=1)
         if self.sync_client is not None:
             self.sync_client.stop()
@@ -573,8 +722,7 @@ def main() -> None:
         # lignes avec codeop ? ou code.InteractiveConsole ?
         print(
             "\nSandbox REPL. Enter the code you need to execute. Each line "
-            "will be executed and remenbered. Type 'reset' to reset the "
-            "sandbox, or 'exit' to exit."
+            "will be executed and remenbered. Type 'exit' to exit."
         )
         while True:
             line_of_code = input(">>>")
