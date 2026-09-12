@@ -102,6 +102,7 @@ class MCPServerMBPP:
 
         @self.mcp.prompt()
         def mbpp_methodology() -> str:
+            """Give a prompt about the methodology to solve MBPP tasks"""
             return (
                 "You are solving a Mostly Basic Python Problems (MBPP) "
                 "task, using the Thought -> Code -> Observation loop.\n\n"
