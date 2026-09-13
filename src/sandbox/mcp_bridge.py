@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import threading
 import time
 from collections.abc import Callable
 from multiprocessing import Queue
@@ -8,28 +10,60 @@ from typing import Any
 from mcp import MCPError
 from mcp_types import BlobResourceContents, TextResourceContents, Tool
 
+from schemas.sandbox_config import SandboxConfig
+from src.mcp_client import MCPClient
+from src.mcp_sync_client import SyncMCPClient
+
 
 class SandboxMCPBridgeMixin:
     """Bridges sandboxed code to the MCP server: tool/resource/prompt
     proxies, the request/response bridge thread, and the tool manual."""
+
+    config: SandboxConfig
+    mcp_client: MCPClient | None
+    sync_client: SyncMCPClient | None
+    generation_nb: int
+    _tools: list[Tool]
+    _mcp_requests: Queue[Any]
+    _mcp_responses: Queue[Any]
+    _mcp_lock: threading.Lock
+    _mcp_wait_total: float
+    _mcp_active_since: float | None
+
+    @staticmethod
+    def _bridge_call(
+        request_q: Queue[Any],
+        response_q: Queue[Any],
+        generation_nb: int,
+        mcp_function: str,
+        arg: Any,
+        error_context: str,
+    ) -> Any:
+        request_q.put((generation_nb, mcp_function, arg, None))
+        generation_nb_rslt, success, payload = response_q.get()
+        while generation_nb_rslt != generation_nb:
+            generation_nb_rslt, success, payload = response_q.get()
+        if not success:
+            raise RuntimeError(
+                f"Error: Couldnt {error_context}. Execution failed: {payload}"
+            )
+        return payload
 
     @staticmethod
     def proxy_list_resources(
         request_q: Queue[Any],
         response_q: Queue[Any],
         generation_nb: int,
-    ) -> list[str]:
+    ) -> Callable[[], list[str]]:
         def list_resources() -> list[str]:
-            request_q.put((generation_nb, "list_resources", None, None))
-            generation_nb_rslt, success, payload = response_q.get()
-            while generation_nb_rslt != generation_nb:
-                generation_nb_rslt, success, payload = response_q.get()
-            if not success:
-                raise RuntimeError(
-                    f"Error: Couldnt list resources. "
-                    f"Execution failed: {payload}"
-                )
-            return payload
+            return SandboxMCPBridgeMixin._bridge_call(
+                request_q,
+                response_q,
+                generation_nb,
+                "list_resources",
+                None,
+                "list resources",
+            )
 
         return list_resources
 
@@ -38,18 +72,16 @@ class SandboxMCPBridgeMixin:
         request_q: Queue[Any],
         response_q: Queue[Any],
         generation_nb: int,
-    ) -> callable[[str], bytes]:
+    ) -> Callable[[str], bytes]:
         def get_resource(resource_name: str) -> bytes:
-            request_q.put((generation_nb, "get_resource", resource_name, None))
-            generation_nb_rslt, success, payload = response_q.get()
-            while generation_nb_rslt != generation_nb:
-                generation_nb_rslt, success, payload = response_q.get()
-            if not success:
-                raise RuntimeError(
-                    f"Error: Couldnt get resource '{resource_name}'"
-                    f". Execution failed: {payload}"
-                )
-            return payload
+            return SandboxMCPBridgeMixin._bridge_call(
+                request_q,
+                response_q,
+                generation_nb,
+                "get_resource",
+                resource_name,
+                f"get resource '{resource_name}'",
+            )
 
         return get_resource
 
@@ -58,17 +90,16 @@ class SandboxMCPBridgeMixin:
         request_q: Queue[Any],
         response_q: Queue[Any],
         generation_nb: int,
-    ) -> callable[[], list[str]]:
+    ) -> Callable[[], list[str]]:
         def list_prompts() -> list[str]:
-            request_q.put((generation_nb, "list_prompts", None, None))
-            generation_nb_rslt, success, payload = response_q.get()
-            while generation_nb_rslt != generation_nb:
-                generation_nb_rslt, success, payload = response_q.get()
-            if not success:
-                raise RuntimeError(
-                    f"Error: Couldnt list prompts. Execution failed: {payload}"
-                )
-            return payload
+            return SandboxMCPBridgeMixin._bridge_call(
+                request_q,
+                response_q,
+                generation_nb,
+                "list_prompts",
+                None,
+                "list prompts",
+            )
 
         return list_prompts
 
@@ -77,18 +108,16 @@ class SandboxMCPBridgeMixin:
         request_q: Queue[Any],
         response_q: Queue[Any],
         generation_nb: int,
-    ) -> callable[[str], str]:
+    ) -> Callable[[str], str]:
         def get_prompt(prompt_name: str) -> str:
-            request_q.put((generation_nb, "get_prompt", prompt_name, None))
-            generation_nb_rslt, success, payload = response_q.get()
-            while generation_nb_rslt != generation_nb:
-                generation_nb_rslt, success, payload = response_q.get()
-            if not success:
-                raise RuntimeError(
-                    f"Error: Couldnt get prompt '{prompt_name}'."
-                    f" Execution failed: {payload}"
-                )
-            return payload
+            return SandboxMCPBridgeMixin._bridge_call(
+                request_q,
+                response_q,
+                generation_nb,
+                "get_prompt",
+                prompt_name,
+                f"get prompt '{prompt_name}'",
+            )
 
         return get_prompt
 
@@ -116,14 +145,17 @@ class SandboxMCPBridgeMixin:
                 self._mcp_responses.put((generation_nb, False, str(e)))
             finally:
                 with self._mcp_lock:
-                    self._mcp_wait_total += (
-                        time.monotonic() - self._mcp_active_since
-                    )
+                    if self._mcp_active_since is not None:
+                        self._mcp_wait_total += (
+                            time.monotonic() - self._mcp_active_since
+                        )
                     self._mcp_active_since = None
 
     def _execute_mcp_call(
         self, mcp_function: str, name: str, kwargs: dict[str, Any]
     ) -> tuple[bool, Any]:
+        if self.sync_client is None:
+            return False, "Error: No MCP client available."
         match mcp_function:
             case "use_tool":
                 rslt = self.sync_client.use_tool(name, kwargs)
@@ -149,9 +181,7 @@ class SandboxMCPBridgeMixin:
     ) -> str | None:
         if isinstance(content, TextResourceContents):
             return content.text
-        if isinstance(content, BlobResourceContents):
-            return content.blob
-        return None
+        return base64.b64decode(content.blob).decode("utf-8", errors="replace")
 
     @staticmethod
     def _make_tool_proxy(

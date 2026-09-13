@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import builtins
 import types
-from typing import Any
+from collections.abc import Callable
+from typing import IO, Any
 
 import dill
+
+from schemas.sandbox_config import SandboxConfig
 
 
 class SandboxNamespaceMixin:
     """Saves, restores and bootstraps the persisted execution namespace."""
+
+    config: SandboxConfig
+    _restricted_import: Callable[..., types.ModuleType]
+    _restricted_open: Callable[..., IO[str] | IO[bytes]]
+
+    def _final_answer(self, answer: Any) -> None: ...
 
     def _save_namespace(self, namespace: dict[str, Any]) -> bytes:
         return dill.dumps(namespace, recurse=True)
