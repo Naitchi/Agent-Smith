@@ -4,8 +4,8 @@ import sys
 
 from mcp.server import MCPServer
 
-import docker
 from schemas.swe_bench_task_input import SWEBenchTaskInput
+from src.docker_manager import DockerManager
 
 
 class MCPServerSWEBench:
@@ -19,10 +19,12 @@ class MCPServerSWEBench:
         self.max_std_length = max_std_length
         self.task = task
         self.mcp = MCPServer("SWEBench-tools")
-        self.client = docker.from_env()
-        self.container = self.client.containers.run(
-            "ubuntu:latest", "sleep infinity"
-        )
+        if self.task:
+            self.docker_manager = DockerManager(
+                self.task.docker_image,
+            )
+        else:
+            raise ValueError("Task must be provided to initialize the server.")
         self.register_tools()
         self.register_resources()
         self.register_prompts()
