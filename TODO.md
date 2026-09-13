@@ -92,10 +92,16 @@ class SandboxProtocol(Protocol):
 - [x] Décider ensemble **comment le serveur MCP MBPP reçoit la tâche** (il a besoin
       de `test_list` pour `run_tests`). Retenu :
       `python mcp_tools_mbpp.py --task-file ../cache/mbpp_task.json`. mobenais lance le process.
-- [ ] Même décision pour SWE-bench : comment le serveur reçoit `docker_image`,
-      `eval_script`, `TESTBED_PATH` (env vars ou args CLI).
+- [~] Même décision pour SWE-bench : comment le serveur reçoit `docker_image`,
+      `eval_script`, `TESTBED_PATH` (env vars ou args CLI). `mcp_tools_swebench.py`
+      reprend la même convention `--task-file` que MBPP pour `docker_image`/
+      `eval_script` (via `SWEBenchTaskInput`) ; `TESTBED_PATH` n'est pas un champ
+      du schéma et reste à câbler.
 - [~] Décider qui construit l'objet `Sandbox` : mobenais dans son CLI, à partir des args
-      `--mcp-stdio` / `--mcp-server`. (CLI `sandbox` le construit ; args MCP parsés mais pas branchés)
+      `--mcp-stdio` / `--mcp-server`. CLI `sandbox` (bclairot) le construit et les args
+      MCP sont maintenant branchés (`Sandbox(config=..., command_stdio=..., url=...)`) ;
+      côté mobenais, `AgentLoopConf`/`src/__main__.py` construit encore un `Sandbox()`
+      nu, sans jamais passer `--mcp-stdio`/`--mcp-server`.
 
 ## 0.6 Les deux mocks de démarrage
 
@@ -247,11 +253,13 @@ Pour ne pas s'attendre l'un l'autre :
 
 Le champ `error` de `ExecutionResult` doit couvrir :
 
-- [ ] Aucun bloc de code valide trouvé *(cas remonté par mobenais, format d'erreur à convenir)*
+- [ ] Aucun bloc de code valide trouvé *(cas remonté par mobenais, format d'erreur à convenir — `extract_code` renvoie `None` mais rien ne construit encore l'observation d'erreur associée)*
 - [ ] Bloc mal formé mais interprété quand même → **expliquer comment**
-- [ ] Timeout atteint → indiquer que la sortie est partielle
-- [ ] Sortie d'outil tronquée → le dire explicitement
-- [ ] Édition ayant introduit une erreur de syntaxe / lint
+- [x] Timeout atteint → indiquer que la sortie est partielle (`result.timed_out=True` +
+      `error="Error: Execution timed out."`, stdout/stderr partiels tout de même capturés)
+- [x] Sortie d'outil tronquée → le dire explicitement (`ExecutionResult.truncated` bool,
+      posé par `_get_stdout_stderr`)
+- [ ] Édition ayant introduit une erreur de syntaxe / lint *(dépend de `edit_file`, pas encore écrit — bclairot.9)*
 
 > *« The LLM should never be left guessing about what happened. »*
 
@@ -259,8 +267,8 @@ Le champ `error` de `ExecutionResult` doit couvrir :
 
 - [x] `uv run sandbox` → REPL interactif
 - [x] `uv run sandbox sandbox_template.json`
-- [~] `uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py" sandbox_template.json` (arg parsé mais pas branché, pas de client MCP)
-- [~] `uv run sandbox --mcp-server <URL>` (idem, arg parsé mais inutilisé)
+- [x] `uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py" sandbox_template.json` (branché : `cli.py` passe `command_stdio`/`url` à `Sandbox(...)`)
+- [x] `uv run sandbox --mcp-server <URL>` (idem, branché)
 - [x] Comportement :
   - [x] Boucle prompt → lecture → exécution dans le **même namespace**
   - [x] Toutes les restrictions actives (imports, FS, timeout, RAM)
@@ -269,25 +277,38 @@ Le champ `error` de `ExecutionResult` doit couvrir :
 
 ## bclairot.6 Génération du manuel
 
-- [~] `build_manual(tools: list[ToolSchema], config: SandboxConfig) -> str` (`get_manual()` existe mais 100 % statique, ne prend pas les tools)
-  - [ ] Nom, description, types de paramètres de chaque outil MCP
+- [x] `build_manual(tools: list[ToolSchema], config: SandboxConfig) -> str` — `get_manual()`
+      (`mcp_bridge.py`) est maintenant dynamique : itère `self._tools` (récupérés du
+      serveur MCP connecté) et appelle `_format_tool()` par outil, plus `self.config`
+      pour les limites/imports/répertoires. Reste une méthode sur `Sandbox`, pas une
+      fonction pure `(tools, config) -> str`.
+  - [x] Nom, description, types de paramètres de chaque outil MCP (`_format_tool`
+        lit `tool.input_schema["properties"]`/`required` + `tool.description`)
   - [~] `final_answer` documenté à part (ce n'est pas un outil MCP) (mentionné dans le texte figé)
   - [x] Rappel des imports autorisés et des répertoires accessibles
 - [ ] **Test** : connecter un autre serveur MCP → le manuel change tout seul
 
 ## bclairot.7 Client MCP
 
-- [ ] `class MCPClient`
-  - [ ] `connect_stdio(command: str)` — lance le serveur en sous-process
-  - [ ] `connect_http(url: str)` — transport streamable HTTP
-  - [ ] `list_tools() -> list[ToolSchema]`
-  - [ ] `list_resources()` / `list_prompts()` (le sujet demande de les exposer)
-  - [ ] `call_tool(name, arguments) -> str`
-  - [ ] `close()`
-- [ ] `make_wrappers(client) -> dict[str, Callable]`
-  - [ ] Une fonction Python par outil, avec `__name__` et `__doc__` corrects
-  - [ ] Injectée dans le namespace sandbox
-  - [ ] **Aucun nom d'outil hardcodé**
+- [~] `class MCPClient` (`src/mcp_client.py`) — présente, mais sous une forme différente
+      de la checklist : un seul point d'entrée `__init__(url=None, command_stdio=None)`
+      + `connect()`/`build_client()` plutôt que deux méthodes séparées
+  - [~] `connect_stdio(command: str)` — unifié dans `__init__`/`connect()`, pas de méthode dédiée
+  - [~] `connect_http(url: str)` — idem
+  - [x] `list_tools() -> list[ToolSchema]` → `get_tools_list() -> list[Tool]`
+  - [x] `list_resources()` / `list_prompts()` → `get_resources_list()` / `get_prompt_list()`
+  - [x] `call_tool(name, arguments) -> str` → `use_tool(name, params) -> CallToolResult`
+        (objet structuré, pas une `str` brute — extrait en `str` côté `mcp_bridge.py`)
+  - [x] `close()` → `disconnect()`
+- [~] `make_wrappers(client) -> dict[str, Callable]` — pas de fonction autonome de ce nom ;
+      l'équivalent est réparti entre `Sandbox._make_tool_proxy` (un outil) et
+      `SandboxMCPBridgeMixin.proxy_*`/`make_mcp_proxy` (resources/prompts), tous deux
+      appelés depuis `_worker` pour peupler `namespace`
+  - [ ] Une fonction Python par outil, avec `__name__` et `__doc__` corrects — **pas fait** :
+        `_make_tool_proxy` renvoie une closure nommée `proxy` sans `__name__`/`__doc__`
+        réassignés vers ceux de l'outil MCP réel
+  - [x] Injectée dans le namespace sandbox (`namespace[name] = self._make_tool_proxy(...)`)
+  - [x] **Aucun nom d'outil hardcodé** (tout vient de `tool_names`/`self._tools` obtenus dynamiquement)
 
 ## bclairot.8 `mcp_tools_mbpp.py`
 
