@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from multiprocessing import Process, Queue
 from queue import Empty
@@ -39,7 +40,7 @@ class Sandbox(
         self,
         url: str | None = None,
         command_stdio: str | None = None,
-        config: SandboxConfig = None,
+        config: SandboxConfig | None = None,
     ) -> None:
         if config:
             self.config = config
@@ -67,10 +68,12 @@ class Sandbox(
                     file=sys.stderr,
                 )
         self.tool_names: list[str] = [tool.name for tool in self._tools]
-        self._tool_param_names: dict[str, list[str]] = {
-            tool.name: list((tool.input_schema.get("properties") or {}).keys())
-            for tool in self._tools
-        }
+        self._tool_param_names: dict[str, list[str]] = {}
+        for tool in self._tools:
+            properties: dict[str, Any] = (
+                tool.input_schema.get("properties") or {}
+            )
+            self._tool_param_names[tool.name] = list(properties.keys())
         self._mcp_requests: Queue[Any] = Queue()
         self._mcp_responses: Queue[Any] = Queue()
         self._mcp_wait_total: float = 0.0
@@ -144,26 +147,24 @@ class Sandbox(
                 tool_param_names,
             )
         if self.mcp_client:
-            namespace["list_resources"] = self.proxy_list_resources(
-                tool_requests,
-                tool_responses,
-                generation_nb,
+
+            def make_mcp_proxy(
+                factory: Callable[
+                    [Queue[Any], Queue[Any], int], Callable[..., Any]
+                ],
+            ) -> Callable[..., Any]:
+                return factory(tool_requests, tool_responses, generation_nb)
+
+            namespace["list_resources"] = make_mcp_proxy(
+                self.proxy_list_resources
             )
-            namespace["get_resource"] = self.proxy_get_resource(
-                tool_requests,
-                tool_responses,
-                generation_nb,
+            namespace["get_resource"] = make_mcp_proxy(
+                self.proxy_get_resource
             )
-            namespace["list_prompts"] = self.proxy_list_prompts(
-                tool_requests,
-                tool_responses,
-                generation_nb,
+            namespace["list_prompts"] = make_mcp_proxy(
+                self.proxy_list_prompts
             )
-            namespace["get_prompt"] = self.proxy_get_prompt(
-                tool_requests,
-                tool_responses,
-                generation_nb,
-            )
+            namespace["get_prompt"] = make_mcp_proxy(self.proxy_get_prompt)
 
         start = time.monotonic()
         result = ExecutionResult()

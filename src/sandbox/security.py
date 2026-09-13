@@ -8,9 +8,13 @@ import types
 from collections.abc import Callable
 from typing import IO, Any
 
+from schemas.sandbox_config import SandboxConfig
+
 
 class SandboxSecurityMixin:
     """Enforces the sandbox's import, attribute and filesystem allowlists."""
+
+    config: SandboxConfig
 
     def _restricted_import(
         self,
