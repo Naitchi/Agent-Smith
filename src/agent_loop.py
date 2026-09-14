@@ -58,33 +58,20 @@ def clear_backup():
     BACKUP_FILE.unlink(missing_ok=True)
 
 
-def init_value() -> tuple[int, int, int, str | None]:
-    if not BACKUP_FILE.exists() or BACKUP_FILE.stat().st_size == 0:
-        return 0, 0, 0, None
-    with open(BACKUP_FILE) as f:
-        res = json.load(f)
-    return (
-        res.get("total_input_tokens", 0),
-        res.get("total_output_token", 0),
-        res.get("total_request", 0),
-        res.get("prec_model"),
-    )
-
-
-
-def init_history(task_id: str) -> tuple[list[dict], list[StepMetrics], str] | None:
-    """Historique du backup, seulement s'il concerne la meme tache."""
+def load_backup(task_id: str) -> dict | None:
+    """Etat du backup, seulement s'il concerne la meme tache."""
     if not BACKUP_FILE.exists() or BACKUP_FILE.stat().st_size == 0:
         return None
     with open(BACKUP_FILE) as f:
         res = json.load(f)
-    messages = res.get("messages")
-    if res.get("task_id") != task_id or not messages:
+    if res.get("task_id") != task_id:
         return None
-    if messages[-1]["role"] == "assistant":
+    messages = res.get("messages") or []
+    if messages and messages[-1]["role"] == "assistant":
         messages.pop()
-    steps = [StepMetrics.model_validate(s) for s in res.get("steps", [])]
-    return messages, steps, res.get("current_context", "")
+    res["messages"] = messages
+    res["steps"] = [StepMetrics.model_validate(s) for s in res.get("steps", [])]
+    return res
 
 
 MAX_MANUAL_CHARS = 700
@@ -143,16 +130,23 @@ class AgentLoop:
             self._prompt_systeme += "\n\n" + compact_manual(manuel)
 
         steps: list[StepMetrics] = []
-        total_input_tokens, total_output_token, total_request, prec_model = init_value()
         last_error: str | None = None
         consecutive_errors = 0
 
         current_context = ""
         relais_en_attente: str | None = None
-        reprise = init_history(task_id)
-        if reprise:
-            message, steps, current_context = reprise
-            relais_en_attente = RELAIS_MODELE
+        total_input_tokens = total_output_token = total_request = 0
+        prec_model: str | None = None
+        backup = load_backup(task_id)
+        if backup:
+            total_input_tokens = backup.get("total_input_tokens", 0)
+            total_output_token = backup.get("total_output_token", 0)
+            total_request = backup.get("total_request", 0)
+            prec_model = backup.get("prec_model")
+            if backup["messages"]:
+                message, steps = backup["messages"], backup["steps"]
+                current_context = backup.get("current_context", "")
+                relais_en_attente = RELAIS_MODELE
         gemini_pool = list(AUTHORIZED_GEMINI)
         groq_pool = list(AUTHORIZED_GROQ)
         exhausted: list[str] = []

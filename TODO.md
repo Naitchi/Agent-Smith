@@ -148,9 +148,14 @@ Pour ne pas s'attendre l'un l'autre :
 - [ ] **Limites par défaut hors sujet** : `max_iterations=45`, `11_000_000` in, `15_000_000` out,
       `1_200_000` s — alors que le docstring de `default_conf()` annonce « les limites MBPP ».
       Cible MBPP : 10 / 6k / 1.5k / 120 s.
-- [ ] `init_value()` **recharge les compteurs de tokens** depuis `backup_memory/backup.json` :
+- [~] ~~`init_value()` **recharge les compteurs de tokens** depuis `backup_memory/backup.json` :
       un run précédent crashé gonfle les totaux du run suivant → dépassement de budget fantôme
-      à la correction. À neutraliser sur le chemin moulinette.
+      à la correction.~~ **Corrigé le 2026-09-14** pour les autres tâches : `init_value()` et
+      `init_history()` fusionnés en `load_backup(task_id)`, qui ignore tout backup d'une autre
+      tâche ou sans `task_id` (compteurs, modèle et historique). Une même tâche reprend
+      historique, `steps`, compteurs et modèle précédent (`RELAIS_MODELE` injecté).
+      **Reste** : si la moulinette relance la même tâche après un crash, le backup est repris
+      et prime sur `--model-name` → désactiver la reprise sur le chemin moulinette.
 - [ ] Le budget est vérifié **après** l'appel LLM → la limite de 6k tokens d'entrée peut être
       franchie avant d'être détectée (à traiter avec la troncature d'historique, §mobenais.3).
 - [x] ~~`sandbox.get_manual()` existe côté bclairot mais **n'est appelé nulle part** côté agent
