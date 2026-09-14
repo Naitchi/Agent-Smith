@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sandbox = "src.sandbox:main"
+sandbox = "src.sandbox.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.5"]
@@ -31,5 +31,8 @@ testpaths = ["tests"]
 # The sandbox is an isolation boundary: it runs untrusted code and bridges
 # to an external MCP process, so broad `except Exception` is intentional.
 # Same for mcp_tools_mbpp
-"src/sandbox.py" = ["BLE001", "S102"]
+"src/sandbox/core.py" = ["BLE001", "S102"]
+"src/sandbox/namespace.py" = ["BLE001"]
+"src/sandbox/mcp_bridge.py" = ["BLE001"]
+"src/sandbox/cli.py" = ["BLE001"]
 "mcp_tools_mbpp.py" = ["BLE001", "S102"]

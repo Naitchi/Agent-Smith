@@ -101,10 +101,36 @@ class MCPServerMBPP:
         """
 
         @self.mcp.prompt()
-        def prompt() -> str:
-            # TODO @simPly-invent aucune idee de ce que tu veux mettre la
-            # dedans :)
-            return ""
+        def mbpp_methodology() -> str:
+            """Give a prompt about the methodology to solve MBPP tasks"""
+            return (
+                "You are solving a Mostly Basic Python Problems (MBPP) "
+                "task, using the Thought -> Code -> Observation loop.\n\n"
+                '1. Fetch the task with get_resource("mbpp://task"). It '
+                "returns the task description, the expected function "
+                "signature, and (when available) the test imports and "
+                "test list.\n"
+                "2. Write a Python implementation that satisfies the "
+                "described function signature.\n"
+                "3. Validate your code with check_syntax(code=...) before "
+                "running the tests, to catch syntax errors early and save "
+                "an iteration.\n"
+                "4. Run your candidate solution with run_tests(code=...). "
+                "You can omit test_list: it falls back to the task's own "
+                "tests automatically. The tool returns "
+                '{"success": bool, "output": str} as JSON — on '
+                'failure, "output" holds the first failing assertion '
+                "plus any captured stdout/stderr.\n"
+                "5. If a test fails, use that output to revise your code "
+                "and try again.\n"
+                '6. Once run_tests reports "success": true, submit your '
+                "final answer by calling final_answer(your_solution_code) "
+                "— pass the raw Python source of your solution as a "
+                "string, not a patch or an explanation.\n\n"
+                "Repeat Thought (what to try next), Code (what you send "
+                "to the sandbox), and Observation (the tool's output) "
+                "until the tests pass."
+            )
 
     def register_resources(self):
         """Register the ``mbpp://task`` resource.
@@ -349,9 +375,9 @@ class MCPServerMBPP:
             result_worker.stdout, result_worker.stderr = (
                 self._get_stdout_stderr(temp_stdout, temp_stderr)
             )
-        return self.change_to_final_result(result_worker, test_list)
+        return self._change_to_final_result(result_worker, test_list)
 
-    def change_to_final_result(
+    def _change_to_final_result(
         self, result_worker: ResultMBPPWorker, test_list: list[str]
     ) -> ResultMBPPTests:
         """Fold raw worker results into the public ``run_tests`` result.
@@ -379,6 +405,16 @@ class MCPServerMBPP:
                 if test.error:
                     final_result.output += f"{test.error}\n"
                 break
+
+        if final_result.success:
+            final_result.output += (
+                "No tests to run.\n"
+                if len(test_list) == 0
+                else (
+                    f"Test {len(result_worker.tests)}/{len(test_list)} "
+                    "passed!\n"
+                )
+            )
         if result_worker.stdout:
             final_result.output += (
                 f"---- stdout ----\n{result_worker.stdout}\n"

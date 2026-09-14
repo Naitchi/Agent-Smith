@@ -30,7 +30,8 @@ BACKUP_FILE = BACKUP_DIR / "backup.json"
 MAX_CONSECUTIVE_ERRORS = 3
 
 
-def backup_json(total_input_tokens: int, total_output_token: int, total_request: int, current_context: str):
+def backup_json(total_input_tokens: int, total_output_token: int, total_request: int, current_context: str, model_name: str,
+                task_id: str, messages: list[dict], steps: list[StepMetrics]):
     try:
         os.mkdir(BACKUP_DIR)
     except FileExistsError:
@@ -42,7 +43,11 @@ def backup_json(total_input_tokens: int, total_output_token: int, total_request:
                 "total_input_tokens": total_input_tokens,
                 "total_output_token": total_output_token,
                 "total_request": total_request,
-                "current_context": current_context
+                "current_context": current_context,
+                "prec_model": model_name,
+                "task_id": task_id,
+                "messages": messages,
+                "steps": [s.model_dump(mode="json") for s in steps],
             },
             f,
             indent=2,
@@ -53,18 +58,33 @@ def clear_backup():
     BACKUP_FILE.unlink(missing_ok=True)
 
 
-def init_value() -> tuple[int, int, int]:
+def init_value() -> tuple[int, int, int, str | None]:
     if not BACKUP_FILE.exists() or BACKUP_FILE.stat().st_size == 0:
-        return 0, 0, 0
+        return 0, 0, 0, None
     with open(BACKUP_FILE) as f:
         res = json.load(f)
     return (
         res.get("total_input_tokens", 0),
         res.get("total_output_token", 0),
         res.get("total_request", 0),
+        res.get("prec_model"),
     )
 
 
+
+def init_history(task_id: str) -> tuple[list[dict], list[StepMetrics], str] | None:
+    """Historique du backup, seulement s'il concerne la meme tache."""
+    if not BACKUP_FILE.exists() or BACKUP_FILE.stat().st_size == 0:
+        return None
+    with open(BACKUP_FILE) as f:
+        res = json.load(f)
+    messages = res.get("messages")
+    if res.get("task_id") != task_id or not messages:
+        return None
+    if messages[-1]["role"] == "assistant":
+        messages.pop()
+    steps = [StepMetrics.model_validate(s) for s in res.get("steps", [])]
+    return messages, steps, res.get("current_context", "")
 
 
 MAX_MANUAL_CHARS = 700
@@ -123,15 +143,27 @@ class AgentLoop:
             self._prompt_systeme += "\n\n" + compact_manual(manuel)
 
         steps: list[StepMetrics] = []
-        total_input_tokens, total_output_token, total_request = init_value()
+        total_input_tokens, total_output_token, total_request, prec_model = init_value()
         last_error: str | None = None
         consecutive_errors = 0
 
         current_context = ""
         relais_en_attente: str | None = None
+        reprise = init_history(task_id)
+        if reprise:
+            message, steps, current_context = reprise
+            relais_en_attente = RELAIS_MODELE
         gemini_pool = list(AUTHORIZED_GEMINI)
         groq_pool = list(AUTHORIZED_GROQ)
         exhausted: list[str] = []
+        if prec_model in AUTHORIZED_GEMINI:
+            self.agent_loop.model_name = prec_model
+            self.agent_loop.api_url = GEMINI_API_URL
+            self.agent_loop.llm = GeminiLLM(prec_model)
+        elif prec_model in AUTHORIZED_GROQ:
+            self.agent_loop.model_name = prec_model
+            self.agent_loop.api_url = GROQ_API_URL
+            self.agent_loop.llm = GroqLLM(prec_model)
         if self.agent_loop.model_name in gemini_pool:
             gemini_pool.remove(self.agent_loop.model_name)
         elif self.agent_loop.model_name in groq_pool:
@@ -147,7 +179,7 @@ class AgentLoop:
         if groq_keys:
             os.environ["GROQ_API_KEY"] = groq_keys[0]
         try:
-            for step in range(1, self.agent_loop.max_iterations + 1):
+            for step in range(len(steps) + 1, self.agent_loop.max_iterations + 1):
                 try:
                     retries = 0
                     while True:
@@ -290,10 +322,12 @@ class AgentLoop:
                 except AgentLoopError:
                     raise
                 except KeyboardInterrupt:
-                    backup_json(total_input_tokens, total_output_token, total_request, current_context)
+                    backup_json(total_input_tokens, total_output_token, total_request, current_context, self.agent_loop.model_name,
+                                task_id, message, steps)
                     raise SigStopError("CTRL+C detected, stopping the agent loop.")
                 except Exception as e:
-                    backup_json(total_input_tokens, total_output_token, total_request, current_context)
+                    backup_json(total_input_tokens, total_output_token, total_request, current_context, self.agent_loop.model_name,
+                                task_id, message, steps)
                     print(f"Error: {e}")
                     last_error = f"{type(e).__name__}: {e}"
                     consecutive_errors += 1
