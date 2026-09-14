@@ -1,13 +1,12 @@
 import sys
 from typing import cast
 
-import docker as d
-from docker import errors
+from docker import DockerClient, errors, from_env
 
 
 class DockerManager:
     def __init__(self, image: str, timeout_timer: int = 30):
-        self.client: d.DockerClient = d.from_env()
+        self.client: DockerClient = from_env()
         self.image: str = image
         self.timeout_timer = timeout_timer
         try:
@@ -49,7 +48,13 @@ class DockerManager:
             code, stdio = cast(
                 tuple[int | None, tuple[bytes | None, bytes | None]],
                 self.container.exec_run(
-                    f"timeout {self.timeout_timer}s {command}",
+                    [
+                        "timeout",
+                        f"{self.timeout_timer}s",
+                        "sh",
+                        "-c",
+                        command,
+                    ],
                     workdir=workdir,
                     demux=True,
                 ),
@@ -66,7 +71,13 @@ class DockerManager:
                 code, stdio = cast(
                     tuple[int | None, tuple[bytes | None, bytes | None]],
                     self.container.exec_run(
-                        f"timeout {self.timeout_timer}s {command}",
+                        [
+                            "timeout",
+                            f"{self.timeout_timer}s",
+                            "sh",
+                            "-c",
+                            command,
+                        ],
                         workdir=workdir,
                         demux=True,
                     ),
