@@ -154,19 +154,22 @@ Pour ne pas s'attendre l'un l'autre :
       dérivé (`self.model_name = self.llm.model`) au lieu d'un tirage indépendant — une seule
       source de vérité, quel que soit le provider. `model: str` ajouté à `LLMProtocole`
       (`schemas/contract_model.py`, fichier commun → à signaler à bclairot).
-- [ ] **Limites par défaut hors sujet** : `max_iterations=45`, `11_000_000` in, `15_000_000` out,
-      `1_200_000` s — alors que le docstring de `default_conf()` annonce « les limites MBPP ».
-      Cible MBPP : 10 / 6k / 1.5k / 120 s.
+- [x] ~~**Limites par défaut hors sujet**~~ **Corrigé le 2026-09-16** : les défauts
+      d'`AgentLoopConf` sont désormais 10 / 6k / 1.5k / 120 s. Les tâches de mise au point de
+      `src/__main__.py`, qui débordent ce cadre par construction, passent leurs limites
+      explicitement — c'est le cas « sujet » qui doit être atteint sans rien configurer.
 - [~] ~~`init_value()` **recharge les compteurs de tokens** depuis `backup_memory/backup.json` :
       un run précédent crashé gonfle les totaux du run suivant → dépassement de budget fantôme
       à la correction.~~ **Corrigé le 2026-09-14** pour les autres tâches : `init_value()` et
       `init_history()` fusionnés en `load_backup(task_id)`, qui ignore tout backup d'une autre
       tâche ou sans `task_id` (compteurs, modèle et historique). Une même tâche reprend
       historique, `steps`, compteurs et modèle précédent (`RELAIS_MODELE` injecté).
-      **Reste** : si la moulinette relance la même tâche après un crash, le backup est repris
-      et prime sur `--model-name` → désactiver la reprise sur le chemin moulinette.
-- [ ] Le budget est vérifié **après** l'appel LLM → la limite de 6k tokens d'entrée peut être
-      franchie avant d'être détectée (à traiter avec la troncature d'historique, §mobenais.3).
+      **Corrigé le 2026-09-16** : `AgentLoop.run()` prend un `resume: bool = True`, et
+      `agent_mbpp` passe `resume=False` — le backup ne peut plus primer sur `--model-name`.
+- [~] ~~Le budget est vérifié **après** l'appel LLM~~ **Corrigé le 2026-09-16** :
+      `check_budget()` est aussi appelé en tête d'itération, avant d'émettre la requête.
+      **Reste** : une requête unique peut toujours franchir la limite à elle seule — c'est la
+      troncature d'historique (§mobenais.3) qui réglera ce cas.
 - [x] ~~`sandbox.get_manual()` existe côté bclairot mais **n'est appelé nulle part** côté agent
       (cf. §mobenais.4).~~ **Corrigé le 2026-09-10** : composé une fois avant la boucle dans
       `AgentLoop.run()`, compacté par `compact_manual()` (493 → 153 tokens), et c'est le prompt
@@ -185,17 +188,26 @@ Pour ne pas s'attendre l'un l'autre :
 - [~] `class LLMResponse` : `text`, `input_tokens`, `output_tokens`, `latency_ms`, `retries`, `api_url`, `model_name`
       *(`schemas/llm_result.py::LLMResult` a text + tokens + `latency_ms` ; manquent `retries`,
       `api_url`, `model_name` — la boucle les recompose à la main)*
-- [ ] `class LLMProvider(ABC)` : `complete(messages, stop, max_tokens) -> LLMResponse`
-      *(seulement un `Protocol` `LLMProtocole.__call__(system, messages)`, pas d'ABC ni de
-      paramètres `stop` / `max_tokens`)*
-- [~] `class OpenAICompatibleProvider(LLMProvider)` (couvre OpenRouter, Groq, Together, Fireworks…)
-      *(`GeminiLLM` et `GroqLLM` dans `schemas/llmclass.py` : deux classes quasi identiques,
-      URL et `max_tokens=2048` en dur, à fusionner en une classe paramétrée par URL)*
-- [ ] Abstraction suffisante pour changer de provider sans refactor (c'est ça qui est noté, pas le choix du provider)
-      *(non : `AgentLoop.run()` connaît Gemini et Groq nommément — pools, URLs et classes en dur)*
+- [x] `class LLMProvider(ABC)` : `complete(system, messages, stop, max_tokens) -> LLMResult`
+      *(`llm/provider.py`. `system` est gardé en premier paramètre pour que `__call__`
+      continue de satisfaire `LLMProtocole`, qui est un fichier commun)*
+- [x] `class OpenAICompatibleProvider(LLMProvider)` (couvre OpenRouter, Groq, Together, Fireworks…)
+      *(`GeminiLLM` et `GroqLLM` fusionnés en une seule classe paramétrée par URL, variable de
+      clé et extras de payload ; `schemas/llmclass.py` supprimé)*
+- [~] Abstraction suffisante pour changer de provider sans refactor (c'est ça qui est noté, pas le choix du provider)
+      *(un `ProviderSpec` dans `llm/registry.py` suffit désormais à ajouter un fournisseur ;
+      `AgentLoop.run()` ne connaît plus ni classe ni URL, mais garde encore deux pools nommés
+      `gemini_pool`/`groq_pool` pour l'ordre de bascule — à généraliser)*
+- [x] **Corrigé le 2026-09-16 — mauvaise clé API sur changement de provider** : les CLI
+      construisaient `GeminiLLM(model_name)` en dur, donc `--model-name qwen/...` partait sur
+      `GEMINI_API_KEY` et l'endpoint Gemini. `make_llm()` apparie modèle, URL et variable de clé
+      en un seul point. Corollaires : `--provider-url` était ignoré (les classes postaient vers
+      une constante de module), et `AgentLoopConf.api_url` restait sur Gemini, ce qui faisait
+      tourner la mauvaise série de clés sur 429.
 - [~] **Multi-tokens par provider — obligatoire**
-      *(rotation réelle sur 429, mais écrite inline dans `AgentLoop.run()` et propagée par
-      mutation de `os.environ` — à extraire)*
+      *(rotation réelle sur 429, indexée par `llm.api_key_env` et non plus par comparaison
+      d'URL, mais toujours écrite inline dans `AgentLoop.run()` et propagée par mutation de
+      `os.environ` — à extraire)*
   - [ ] `class TokenRotator` : `next_key()`, `mark_rate_limited(key, retry_after)`, `mark_exhausted(key)`
   - [x] Plusieurs clés lues depuis l'env (`GEMINI_API_KEYS` / `GROQ_API_KEYS`, liste séparée par virgules,
         repli sur la clé simple) — *à documenter dans `.env.example`, qui ne liste que `GROQ_API_KEY`
@@ -203,6 +215,10 @@ Pour ne pas s'attendre l'un l'autre :
 - [x] Fallback de provider si indisponibilité *(bascule modèle Gemini → Groq quand toutes les clés
       sont rate-limitées, puis `AgentLoopError` si le pool est vide)*
 - [~] Retry + backoff sur 429 / 5xx / timeout → comptés dans `retries` et `total_requests`
+      *(2026-09-16 : `SWITCH_MODEL_STATUS = {404, 408, 429, 500, 502, 503, 504}`. Le 429 épuise
+      la série de clés puis change de modèle ; les autres changent de modèle directement, la clé
+      n'y étant pour rien. Tout autre statut remonte. **Reste** : pas de backoff temporisé, et
+      les timeouts réseau (`httpx.RequestError`) ne sont pas couverts)*
       *(429 uniquement, retry immédiat sans backoff ni `Retry-After` ; 5xx et timeouts remontent
       en erreur. Le comptage `retries` / `total_requests`, lui, est bon)*
 - [ ] **`stop_sequences`** (`<end_code>`, `</tool_call>`…) → empêche le modèle d'halluciner l'observation
