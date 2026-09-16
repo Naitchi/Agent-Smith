@@ -19,6 +19,10 @@ from schemas.llm_result import LLMResult
 load_dotenv()
 
 DEFAULT_MAX_TOKENS = 2048
+# 0 = on prend toujours le token le plus probable. Un agent qui rend du
+# code juge par des tests veut deux runs identiques sur la meme tache :
+# sinon un echec n'est pas rejouable et les modeles ne se comparent plus.
+DEFAULT_TEMPERATURE = 0.0
 
 
 class LLMProvider(ABC):
@@ -40,12 +44,35 @@ class LLMProvider(ABC):
         messages: list[dict],
         stop: list[str] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float = DEFAULT_TEMPERATURE,
     ) -> LLMResult:
         """Une completion : messages -> texte + usage."""
 
-    def __call__(self, system: str, messages: list[dict]) -> LLMResult:
-        """Forme attendue par `schemas.contract_model.LLMProtocole`."""
-        return self.complete(system, messages)
+    def __call__(
+        self,
+        system: str,
+        messages: list[dict],
+        stop: list[str] | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float = DEFAULT_TEMPERATURE,
+    ) -> LLMResult:
+        """Forme attendue par `schemas.contract_model.LLMProtocole`.
+
+        Les trois reglages ont un defaut, donc l'appel a deux arguments du
+        protocole reste valide : un appelant qui n'en veut pas ne voit pas
+        la difference. L'ordre est celui de `complete()`.
+
+        `stop` n'a volontairement pas de defaut ici : sa valeur est dictee
+        par le format du prompt, pas par le fournisseur. Elle vient de
+        `schemas.tools_agent.STOP_SEQUENCES`, en face du prompt qui l'ecrit.
+        """
+        return self.complete(
+            system,
+            messages,
+            stop=stop,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -75,6 +102,7 @@ class OpenAICompatibleProvider(LLMProvider):
         messages: list[dict],
         stop: list[str] | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float = DEFAULT_TEMPERATURE,
     ) -> LLMResult:
         """Appelle l'endpoint et rend un `LLMResult`.
 
@@ -91,6 +119,7 @@ class OpenAICompatibleProvider(LLMProvider):
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": max_tokens,
+            "temperature": temperature,
             "messages": [{"role": "system", "content": system}] + messages,
             **self.extra_payload,
         }

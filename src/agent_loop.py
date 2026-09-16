@@ -15,6 +15,7 @@ from schemas import (AUTHORIZED_GEMINI,
                      OutputParameter,
                      RELAIS_MODELE,
                      SigStopError,
+                     STOP_SEQUENCES,
                      SolutionOutput,
                      StepMetrics,
                      extract_code
@@ -191,7 +192,9 @@ class AgentLoop:
                                 prompt_systeme += "\n\n" + relais_en_attente
                             if self.agent_loop.model_name in FORCE_429_MODELS:
                                 raise _fake_429(self.agent_loop.api_url)
-                            result = self.agent_loop.llm(prompt_systeme, message)
+                            result = self.agent_loop.llm(
+                                prompt_systeme, message, stop=STOP_SEQUENCES
+                            )
                             if DEBUG_BASCULE:
                                 print(f"[step {step}] {self.agent_loop.model_name} "
                                       f"({self.agent_loop.api_url})")

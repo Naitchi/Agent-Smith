@@ -221,7 +221,11 @@ Pour ne pas s'attendre l'un l'autre :
       les timeouts réseau (`httpx.RequestError`) ne sont pas couverts)*
       *(429 uniquement, retry immédiat sans backoff ni `Retry-After` ; 5xx et timeouts remontent
       en erreur. Le comptage `retries` / `total_requests`, lui, est bon)*
-- [ ] **`stop_sequences`** (`<end_code>`, `</tool_call>`…) → empêche le modèle d'halluciner l'observation
+- [x] **`stop_sequences`** (`<end_code>`, `</tool_call>`…) → empêche le modèle d'halluciner l'observation
+      *(2026-09-16 : `schemas/tools_agent.py::STOP_SEQUENCES = [END_CODE]`, en face du prompt qui
+      écrit `<end_code>` ; passé par `agent_loop` à chaque requête via `LLMProvider.__call__`.
+      `temperature` (défaut 0.0) et `max_tokens` traversent `__call__` par la même occasion.
+      **Reste** : seul `<end_code>` est armé, les formats 2 et 3 ci-dessous n'ayant pas de parseur)*
 - [x] Usage tracking : tokens, retries, latence, nombre de requêtes
 - [x] Free tiers uniquement, **aucune clé en dur** (grade 0 sinon)
 
