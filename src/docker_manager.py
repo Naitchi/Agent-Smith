@@ -1,4 +1,8 @@
+import io
+import os
 import sys
+import tarfile
+from pathlib import PurePosixPath
 from typing import cast
 
 from docker import DockerClient, errors, from_env
@@ -24,6 +28,16 @@ class DockerManager:
                 raise RuntimeError(
                     f"Error: Even after retry, failed to start container: {e}"
                 ) from e
+        try:
+            self.workdir = os.environ["TESTBED_PATH"]
+            if not self.workdir:
+                raise RuntimeError(
+                    "Error: environment variable TESTBED_PATH is empty."
+                )
+        except KeyError as e:
+            raise RuntimeError(
+                "Error: no environment variable TESTBED_PATH set."
+            ) from e
 
     def run_container(self):
         return self.client.containers.run(
@@ -38,9 +52,30 @@ class DockerManager:
                 f"Failed to pull Docker image {self.image}: {e}"
             ) from e
 
+    def replace_file(self, path: str, content: bytes) -> None:
+        p = PurePosixPath(path)
+        if not p.is_absolute():
+            p = PurePosixPath(self.workdir) / p
+
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+            info = tarfile.TarInfo(p.name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+
+        tar_buffer.seek(0)
+        self.container.put_archive(str(p.parent), tar_buffer)
+
     def exec(
-        self, command: str, workdir: str
+        self, command: str, workdir: str | None = None
     ) -> tuple[int | None, str | None, str | None]:
+        if not workdir:
+            workdir = self.workdir
+        elif not PurePosixPath(workdir).is_absolute():
+            # Docker's exec API rejects a relative Cwd outright ("Cwd must
+            # be an absolute path") — resolve it against the testbed root
+            # ourselves, the same way replace_file() already does.
+            workdir = str(PurePosixPath(self.workdir) / workdir)
         code: int | None = None
         stderr: str | None = None
         stdout: str | None = None
@@ -51,7 +86,7 @@ class DockerManager:
                     [
                         "timeout",
                         f"{self.timeout_timer}s",
-                        "sh",
+                        "bash",
                         "-c",
                         command,
                     ],
@@ -74,7 +109,7 @@ class DockerManager:
                         [
                             "timeout",
                             f"{self.timeout_timer}s",
-                            "sh",
+                            "bash",
                             "-c",
                             command,
                         ],
