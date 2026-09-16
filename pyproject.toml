@@ -9,6 +9,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "dill>=0.3",
     "mcp-types>=2.0.0",
+    "docker>=7.2.0",
 ]
 
 [project.scripts]
@@ -36,3 +37,4 @@ testpaths = ["tests"]
 "src/sandbox/mcp_bridge.py" = ["BLE001"]
 "src/sandbox/cli.py" = ["BLE001"]
 "mcp_tools_mbpp.py" = ["BLE001", "S102"]
+"mcp_tools_swebench.py" = ["BLE001", "S102"]
