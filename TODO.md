@@ -50,6 +50,8 @@ La seule chose que mobenais connaît de bclairot : `Sandbox.execute()`, `Sandbox
 - [x] `pyproject.toml` avec les entry points :
   - [x] `sandbox = "agent_smith.sandbox.cli:main"` → `uv run sandbox`
   - [ ] `agent_mbpp` et `agent_swebench` importables → `uv run python -m agent_mbpp`
+        *(`src/agent_MBPP.py` existe mais est vide (0 octet) et non commité ; aucun entry point
+        dans `pyproject.toml`, qui n'expose que `sandbox`)*
 - [x] `.env.example`, `.gitignore` (`.env`, `cache/`, `evaluations/`)
 - [x] `sandbox_template.json` à la racine
 - [x] `mcp_tools_mbpp.py` et `mcp_tools_swebench.py` à la racine (imposé par le sujet)
@@ -107,11 +109,13 @@ class SandboxProtocol(Protocol):
 
 Pour ne pas s'attendre l'un l'autre :
 
-- [ ] **bclairot fournit à mobenais un `FakeSandbox`** (10 lignes) dès le jour 1 : `execute()` fait
+- [~] **bclairot fournit à mobenais un `FakeSandbox`** (10 lignes) dès le jour 1 : `execute()` fait
       un `exec()` naïf, `get_manual()` renvoie un texte en dur. mobenais peut coder toute
-      sa boucle dessus.
+      sa boucle dessus. *(jamais livré ; la vraie `Sandbox` a servi directement — d'où le
+      bloquant mobenais.0)*
 - [ ] **mobenais fournit à bclairot un `scripts/fake_agent.py`** : un script qui envoie 3 blocs de
       code en dur à la sandbox et affiche les `ExecutionResult`. bclairot teste sans LLM.
+      *(n'existe pas ; `scripts/test_mcp.py` (bclairot) teste le client MCP, pas la sandbox)*
 
 ## 0.7 Répartition des fichiers (évite les conflits git)
 
@@ -128,30 +132,116 @@ Pour ne pas s'attendre l'un l'autre :
 
 # LOT mobenais — CÔTÉ AGENT
 
+## mobenais.0 Bloquants et bugs relevés — audit du 2026-09-08
+
+- [x] ~~🔴 BLOQUANT — la chaîne agent ne démarre plus (`TypeError` sur `MCPClient`).~~
+      **Levé le 2026-09-09** : `src/sandbox.py:41` passe `stdio` en positionnel sur
+      `server_path`, donc pas de `TypeError`. `Sandbox()` se construit et
+      `execute("print(1+1)")` renvoie `stdout='2\n'`.
+- [~] ~~🔴 **Reste bloquant : le MCP n'est jamais branché.**~~ **Levé le 2026-09-16 sur le
+      chemin moulinette** : `server_path` a disparu de la signature (bclairot, PR #14), et
+      `agent_mbpp/__main__.py` construit maintenant
+      `Sandbox(command_stdio=mcp_stdio_command(args.task_file))` puis le passe à
+      `AgentLoopConf` — `run_tests`/`check_syntax` apparaissent dans `get_manual()`.
+      **Reste** : le défaut d'`AgentLoopConf` est toujours un `Sandbox()` nu, donc
+      `uv run -m src` tourne encore sans aucun outil ; et `agent_swebench` reste à câbler
+      (avec `TESTBED_PATH` dans l'environnement du sous-processus serveur, cf. §bclairot.10).
+- [x] ~~`AgentLoopConf` **ignore le `llm` qu'on lui passe** : `schemas/agent_class_monitoring.py:27`
+      force `GeminiLLM("gemini-3.1-flash-lite")` alors que `model_name = random.choice(models_name)`
+      → le `model_name` écrit dans `StepMetrics` n'est pas le modèle réellement interrogé
+      (métriques de benchmark faussées, et provenance douteuse pour la correction).~~
+      **Corrigé le 2026-09-10** : le `llm` passé est retenu tel quel, et `model_name` en est
+      dérivé (`self.model_name = self.llm.model`) au lieu d'un tirage indépendant — une seule
+      source de vérité, quel que soit le provider. `model: str` ajouté à `LLMProtocole`
+      (`schemas/contract_model.py`, fichier commun → à signaler à bclairot).
+- [x] ~~**Limites par défaut hors sujet**~~ **Corrigé le 2026-09-16** : les défauts
+      d'`AgentLoopConf` sont désormais 10 / 6k / 1.5k / 120 s. Les tâches de mise au point de
+      `src/__main__.py`, qui débordent ce cadre par construction, passent leurs limites
+      explicitement — c'est le cas « sujet » qui doit être atteint sans rien configurer.
+- [~] ~~`init_value()` **recharge les compteurs de tokens** depuis `backup_memory/backup.json` :
+      un run précédent crashé gonfle les totaux du run suivant → dépassement de budget fantôme
+      à la correction.~~ **Corrigé le 2026-09-14** pour les autres tâches : `init_value()` et
+      `init_history()` fusionnés en `load_backup(task_id)`, qui ignore tout backup d'une autre
+      tâche ou sans `task_id` (compteurs, modèle et historique). Une même tâche reprend
+      historique, `steps`, compteurs et modèle précédent (`RELAIS_MODELE` injecté).
+      **Corrigé le 2026-09-16** : `AgentLoop.run()` prend un `resume: bool = True`, et
+      `agent_mbpp` passe `resume=False` — le backup ne peut plus primer sur `--model-name`.
+- [~] ~~Le budget est vérifié **après** l'appel LLM~~ **Corrigé le 2026-09-16** :
+      `check_budget()` est aussi appelé en tête d'itération, avant d'émettre la requête.
+      **Reste** : une requête unique peut toujours franchir la limite à elle seule — c'est la
+      troncature d'historique (§mobenais.3) qui réglera ce cas.
+- [x] ~~`sandbox.get_manual()` existe côté bclairot mais **n'est appelé nulle part** côté agent
+      (cf. §mobenais.4).~~ **Corrigé le 2026-09-10** : composé une fois avant la boucle dans
+      `AgentLoop.run()`, compacté par `compact_manual()` (493 → 153 tokens), et c'est le prompt
+      composé qui part dans `SolutionOutput.system_prompt`.
+- [x] ~~`SYSTEM_PROMPT` est rédigé en français alors qu'il exige des réponses en anglais.~~
+      **Corrigé le 2026-09-09** : prompt entièrement en anglais (73 tokens). Le fond reste
+      à écrire (cf. §mobenais.4).
+- [x] ~~`uv run -m src` part sur un prompt de test (`DEFAULT_TASK`) de type injection —
+      à remplacer par une vraie tâche MBPP avant toute démo.~~ **Corrigé** : l'injection
+      (« oublie les instructions PRECEDENTE… », `d99ec6e`) a laissé place aux trois tâches
+      de mise au point `collatz`/`lcs`/`puzzle`, choisies pour forcer la boucle à découper
+      son travail sur plusieurs `execute()`.
+
 ## mobenais.1 Couche LLM
 
-- [ ] `class LLMResponse` : `text`, `input_tokens`, `output_tokens`, `latency_ms`, `retries`, `api_url`, `model_name`
-- [ ] `class LLMProvider(ABC)` : `complete(messages, stop, max_tokens) -> LLMResponse`
-- [ ] `class OpenAICompatibleProvider(LLMProvider)` (couvre OpenRouter, Groq, Together, Fireworks…)
-- [ ] Abstraction suffisante pour changer de provider sans refactor (c'est ça qui est noté, pas le choix du provider)
-- [ ] **Multi-tokens par provider — obligatoire**
+- [~] `class LLMResponse` : `text`, `input_tokens`, `output_tokens`, `latency_ms`, `retries`, `api_url`, `model_name`
+      *(`schemas/llm_result.py::LLMResult` a text + tokens + `latency_ms` ; manquent `retries`,
+      `api_url`, `model_name` — la boucle les recompose à la main)*
+- [x] `class LLMProvider(ABC)` : `complete(system, messages, stop, max_tokens) -> LLMResult`
+      *(`llm/provider.py`. `system` est gardé en premier paramètre pour que `__call__`
+      continue de satisfaire `LLMProtocole`, qui est un fichier commun)*
+- [x] `class OpenAICompatibleProvider(LLMProvider)` (couvre OpenRouter, Groq, Together, Fireworks…)
+      *(`GeminiLLM` et `GroqLLM` fusionnés en une seule classe paramétrée par URL, variable de
+      clé et extras de payload ; `schemas/llmclass.py` supprimé)*
+- [~] Abstraction suffisante pour changer de provider sans refactor (c'est ça qui est noté, pas le choix du provider)
+      *(un `ProviderSpec` dans `llm/registry.py` suffit désormais à ajouter un fournisseur ;
+      `AgentLoop.run()` ne connaît plus ni classe ni URL, mais garde encore deux pools nommés
+      `gemini_pool`/`groq_pool` pour l'ordre de bascule — à généraliser)*
+- [x] **Corrigé le 2026-09-16 — mauvaise clé API sur changement de provider** : les CLI
+      construisaient `GeminiLLM(model_name)` en dur, donc `--model-name qwen/...` partait sur
+      `GEMINI_API_KEY` et l'endpoint Gemini. `make_llm()` apparie modèle, URL et variable de clé
+      en un seul point. Corollaires : `--provider-url` était ignoré (les classes postaient vers
+      une constante de module), et `AgentLoopConf.api_url` restait sur Gemini, ce qui faisait
+      tourner la mauvaise série de clés sur 429.
+- [~] **Multi-tokens par provider — obligatoire**
+      *(rotation réelle sur 429, indexée par `llm.api_key_env` et non plus par comparaison
+      d'URL, mais toujours écrite inline dans `AgentLoop.run()` et propagée par mutation de
+      `os.environ` — à extraire)*
   - [ ] `class TokenRotator` : `next_key()`, `mark_rate_limited(key, retry_after)`, `mark_exhausted(key)`
-  - [ ] Plusieurs clés lues depuis l'env (`OPENROUTER_API_KEY`, `OPENROUTER_API_KEY_2`, ou liste séparée par virgules)
-- [ ] Fallback de provider si indisponibilité
-- [ ] Retry + backoff sur 429 / 5xx / timeout → comptés dans `retries` et `total_requests`
-- [ ] **`stop_sequences`** (`<end_code>`, `</tool_call>`…) → empêche le modèle d'halluciner l'observation
-- [ ] Usage tracking : tokens, retries, latence, nombre de requêtes
+  - [x] Plusieurs clés lues depuis l'env (`GEMINI_API_KEYS` / `GROQ_API_KEYS`, liste séparée par virgules,
+        repli sur la clé simple) — *à documenter dans `.env.example`, qui ne liste que `GROQ_API_KEY`
+        et `GEMINI_API_KEY`*
+- [x] Fallback de provider si indisponibilité *(bascule modèle Gemini → Groq quand toutes les clés
+      sont rate-limitées, puis `AgentLoopError` si le pool est vide)*
+- [~] Retry + backoff sur 429 / 5xx / timeout → comptés dans `retries` et `total_requests`
+      *(2026-09-16 : `SWITCH_MODEL_STATUS = {404, 408, 429, 500, 502, 503, 504}`. Le 429 épuise
+      la série de clés puis change de modèle ; les autres changent de modèle directement, la clé
+      n'y étant pour rien. Tout autre statut remonte. **Reste** : pas de backoff temporisé, et
+      les timeouts réseau (`httpx.RequestError`) ne sont pas couverts)*
+      *(429 uniquement, retry immédiat sans backoff ni `Retry-After` ; 5xx et timeouts remontent
+      en erreur. Le comptage `retries` / `total_requests`, lui, est bon)*
+- [x] **`stop_sequences`** (`<end_code>`, `</tool_call>`…) → empêche le modèle d'halluciner l'observation
+      *(2026-09-16 : `schemas/tools_agent.py::STOP_SEQUENCES = [END_CODE]`, en face du prompt qui
+      écrit `<end_code>` ; passé par `agent_loop` à chaque requête via `LLMProvider.__call__`.
+      `temperature` (défaut 0.0) et `max_tokens` traversent `__call__` par la même occasion.
+      **Reste** : seul `<end_code>` est armé, les formats 2 et 3 ci-dessous n'ayant pas de parseur)*
+- [x] Usage tracking : tokens, retries, latence, nombre de requêtes
 - [x] Free tiers uniquement, **aucune clé en dur** (grade 0 sinon)
 
 ## mobenais.2 Extraction de code
 
-- [ ] `extract_code(llm_text: str) -> ExtractedCode | None`
-- [ ] Format 1 — bloc Python (primaire) : ` ```python ... ``` ` + `<end_code>`
+- [~] `extract_code(llm_text: str) -> ExtractedCode | None`
+      *(`schemas/tools_agent.py::extract_code` renvoie `str | None` ; pas de type `ExtractedCode`,
+      donc aucun moyen de dire au LLM quel format a été reconnu)*
+- [~] Format 1 — bloc Python (primaire) : ` ```python ... ``` ` + `<end_code>`
+      *(fences ```` ``` ````/```py``` OK, dernier bloc retenu ; `<end_code>` non géré)*
 - [ ] Format 2 — XML Anthropic : `<invoke name="..."><parameter name="...">…</parameter></invoke>`
 - [ ] Format 3 — JSON/Hermes : `<tool_call>{"name": "...", "arguments": {...}}</tool_call>`
 - [ ] Format 4 — ReAct : `Action: tool_name` / `Action Input: {...}`
 - [ ] `to_python_call(name, args) -> str` → `result = read_file(filepath="/testbed/file.py")`
 - [ ] Tolérance : bloc non fermé, ` ``` ` sans langage, texte parasite
+      *(bloc non fermé → `None` ; « ``` sans langage » OK)*
 - [ ] Si interprétation « de secours » → le signaler pour que bclairot/le LLM le sache
 - [x] `None` propre si rien d'exploitable → observation d'erreur explicite au LLM
 
@@ -167,14 +257,27 @@ Pour ne pas s'attendre l'un l'autre :
 - [x] Arrêt sur `result.final_answer is not None` OU limite atteinte
 - [x] Aucun crash possible → `SolutionOutput(success=False, error=...)` écrit quand même
 - [ ] Troncature / résumé des vieilles observations pour tenir le budget
+      *(prioritaire : c'est ce qui rend les 6k tokens d'entrée MBPP tenables)*
+- [ ] Sur `max_iterations` atteint, `solution` reste `""` — renvoyer le dernier code candidat
 
 ## mobenais.4 System prompts (fortement noté)
 
-- [ ] Doc des outils **injectée depuis `sandbox.get_manual()`** — jamais recopiée à la main
-- [ ] Slots explicites : `Thought:` / `Code:` / `Observation:`
-- [ ] **Au moins un exemple complet** de boucle de raisonnement (few-shot)
-- [ ] Méthodologie de debug pas-à-pas : lire → chercher → hypothèse → éditer → tester
-- [ ] Prompt MBPP et prompt SWE-bench séparés
+> État au 2026-09-10 : `SYSTEM_PROMPT_MBPP` écrit dans `schemas/tools_agent.py`
+> (280 tokens ; 434 une fois `get_manual()` compacté concaténé). Validé sur 3 tâches
+> MBPP, résolues en 2-3 itérations pour ~1300-2000 tokens d'entrée sur les 6000.
+> Restent : le prompt SWE-bench, et l'ablation vague vs explicite.
+
+- [x] Doc des outils **injectée depuis `sandbox.get_manual()`** — jamais recopiée à la main
+      *(`AgentLoop.run()` la concatène au prompt ; `compact_manual()` coupe les phrases les plus
+      longues d'abord, sans rien hardcoder sur le contenu → reste valide avec un serveur MCP inconnu)*
+- [x] Slots explicites : `Thought:` / `Code:` / `Observation:` *(cadrés par `SYSTEM_PROMPT_MBPP`, avec `<end_code>`)*
+- [x] **Au moins un exemple complet** de boucle de raisonnement (few-shot) *(2 tours, dans `SYSTEM_PROMPT_MBPP`)*
+- [~] Méthodologie de debug pas-à-pas : lire → chercher → hypothèse → éditer → tester
+      *(version MBPP faite : « imprime la valeur obtenue à côté de l'attendue, ne corrige que ce
+      que l'écart montre, ne réécris pas la fonction ». La version SWE-bench reste à écrire)*
+- [~] Prompt MBPP et prompt SWE-bench séparés
+      *(`SYSTEM_PROMPT_MBPP` écrit — 280 tokens, 434 avec le manuel compacté. Le prompt
+      SWE-bench n'existe pas)*
 - [ ] Comparaison empirique prompt vague vs prompt explicite (→ sert d'ablation §C.1)
 
 > ⚠️ **MBPP : 6 000 tokens d'entrée cumulés sur toute la tâche.** L'historique
@@ -183,14 +286,28 @@ Pour ne pas s'attendre l'un l'autre :
 
 ## mobenais.5 CLI agent MBPP
 
-- [ ] `uv run python -m agent_mbpp --task-file ... --output ... --model-name ... --provider-url ...`
-- [ ] Clé API lue depuis l'environnement
-- [ ] Chargement `MBPPTaskInput`, lancement du serveur MCP MBPP (selon §0.5)
-- [ ] Écriture de `SolutionOutput` : `benchmark="mbpp"`, `solution` = code Python
-- [ ] Limites : **10 itérations / 6k in / 1.5k out / 120 s**
-- [ ] Objectif : **4/5**
+> État au 2026-09-10 : package `agent_mbpp/` créé à la racine (`python -m agent_mbpp`),
+> ajouté à `packages` dans `pyproject.toml`. Validé de bout en bout sur 3 tâches MBPP :
+> résolues en 2-3 itérations, 1300-2000 tokens d'entrée sur 6000, tests rejoués OK.
+> `src/agent_MBPP.py` (0 octet) est à supprimer.
+
+- [x] `uv run python -m agent_mbpp --task-file ... --output ... --model-name ... --provider-url ...`
+- [x] Clé API lue depuis l'environnement *(refus explicite si aucune clé, jamais en argument)*
+- [x] Chargement `MBPPTaskInput`, lancement du serveur MCP MBPP (selon §0.5)
+      *(chargement + validation Pydantic faits ; `mcp_stdio_command()` construit la commande
+      `--task-file` sur le fichier de la moulinette, et `main()` la passe à
+      `Sandbox(command_stdio=...)` qui lance le process — `run_tests`/`check_syntax` sont
+      dans le manuel injecté au prompt système)*
+- [x] Écriture de `SolutionOutput` : `benchmark="mbpp"`, `solution` = code Python
+      *(le prompt exige `final_answer(<source>)` ; filet dans `main()` qui reprend le dernier
+      `sandbox_input` si la boucle s'arrête sans `final_answer`)*
+- [x] Limites : **10 itérations / 6k in / 1.5k out / 120 s** *(constantes en tête de
+      `agent_mbpp/__main__.py` ; les défauts d'`AgentLoopConf` restent hors sujet, cf. §mobenais.0)*
+- [ ] Objectif : **4/5** *(3/3 sur des tâches de test maison ; jamais passé sur `exam_mbpp.sh`)*
 
 ## mobenais.6 CLI agent SWE-bench
+
+> ⚠️ **Rien n'est commencé** (aucun fichier).
 
 - [ ] `uv run python -m agent_swebench --task-file ... --output ... --model-name ... --provider-url ...`
 - [ ] Chargement `SWEBenchTaskInput`, passage des infos au serveur MCP de bclairot

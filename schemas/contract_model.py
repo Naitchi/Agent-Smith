@@ -21,4 +21,6 @@ class SandboxProtocol(Protocol):
 
 
 class LLMProtocole(Protocol):
+    model: str
+
     def __call__(self, system: str, messages: list[dict]) -> LLMResult: ...

@@ -5,3 +5,4 @@ src/__pycache__
 cache/
 evaluations/
 .data.txt
+solution.json
