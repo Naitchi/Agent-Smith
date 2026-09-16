@@ -1,7 +1,7 @@
 """Petit main de test : AgentLoop avec une conf par defaut.
 
-    uv run -m src                  # tache par defaut (collatz)
-    uv run -m src collatz          # une tache du catalogue TASKS
+    uv run -m src                  # tache par defaut (uno)
+    uv run -m src uno              # une tache du catalogue TASKS
     uv run -m src "ta tache ici"   # une tache libre
 """
 from __future__ import annotations
@@ -9,11 +9,10 @@ from __future__ import annotations
 import os
 import sys
 
+from llm import make_llm
 from schemas import (
     AgentLoopConf,
-    GeminiLLM,
     SolutionOutput,
-    
 )
 
 from .agent_loop import AgentLoop
@@ -91,10 +90,10 @@ When the goal is reached, call final_answer(str(depth)) with the minimum number 
 of moves.
 """
 
-task = {
-    "collatz": uno,
-    "lcs": dos,
-    "puzzle": tres,
+TASKS = {
+    "uno": uno,
+    "dos": dos,
+    "tres": tres,
 }
 
 DEFAULT_TASK = uno
@@ -102,8 +101,18 @@ DEFAULT_TASK = uno
 
 
 def default_conf() -> AgentLoopConf:
-    """Conf par défaut, avec les limites MBPP du sujet."""
-    return AgentLoopConf(GeminiLLM("gemini-3.1-flash-lite"))
+    """Conf des taches de mise au point, PAS les limites du sujet.
+
+    Les defauts d'`AgentLoopConf` sont ceux de MBPP ; collatz/lcs/puzzle sont
+    choisies pour les deborder, d'ou des limites explicitement plus larges.
+    """
+    return AgentLoopConf(
+        make_llm("gemini-3.5-flash-lite"),
+        max_iterations=45,
+        max_input_tokens=200_000,
+        max_output_tokens=50_000,
+        max_wall_time_seconds=1_800,
+    )
 
 
 def display(out: SolutionOutput) -> None:
@@ -129,16 +138,16 @@ def display(out: SolutionOutput) -> None:
         print(f"error      : {out.error}")
 
 
-def main() -> int:
+def main() -> None:
     if not os.environ.get("GEMINI_API_KEY"):
         print("GEMINI_API_KEY absent : `make install` puis remplis .env")
-        return 1
+        return
 
     arg = sys.argv[1] if len(sys.argv) > 1 else None
     if arg is None:
         task = DEFAULT_TASK
     else:
-        task = task.get(arg, arg)
+        task = TASKS.get(arg, arg)
     conf = default_conf()
     try:
         out = AgentLoop(conf).run(
@@ -150,7 +159,6 @@ def main() -> int:
         conf.sandbox.close()
 
     display(out)
-    return 0 if out.success else 1
 
 
 if __name__ == "__main__":

@@ -10,10 +10,11 @@ Always write in English.
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
+# "qwen/qwen3.6-27b" retire le 2026-09-16 : 404 chez Groq, le modele n'existe
+# pas. Le garder faisait perdre une bascule a chaque tirage dessus.
 AUTHORIZED_GROQ = [
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
-    "qwen/qwen3.6-27b",
     "qwen/qwen3.8-27b",
     "groq/compound",
     "groq/compound-mini"

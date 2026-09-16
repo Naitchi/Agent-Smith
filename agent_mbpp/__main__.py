@@ -18,10 +18,10 @@ import shlex
 import sys
 from pathlib import Path
 
+from llm import make_llm
 from schemas import (
     SYSTEM_PROMPT_MBPP,
     AgentLoopConf,
-    GeminiLLM,
     MBPPTaskInput,
     SolutionOutput,
 )
@@ -59,16 +59,11 @@ def build_user_prompt(task: MBPPTaskInput) -> str:
 def mcp_stdio_command(task_file: Path) -> str:
     """Rend la commande qui lance le serveur MCP MBPP sur cette tache.
 
-    Contrat arrete avec bclairot (TODO 0.5) : convention `--task-file`, et
-    c'est l'agent qui lance le process. On repasse tel quel le fichier de la
-    moulinette : elle ecrit un `MBPPTaskInput.model_dump_json()` et le serveur
-    le relit avec le meme `MBPPTaskInput.model_validate`, donc en recopier une
-    version ne ferait qu'ouvrir une occasion de divergence.
-
-    La commande est `shlex.split` par `Sandbox`, et le serveur tourne en
-    sous-processus depuis un repertoire courant qu'on ne choisit pas (la
-    moulinette lance l'agent depuis le sien) : d'ou les chemins absolus et
-    `shlex.quote`.
+    Contrat avec bclairot (TODO 0.5) : convention `--task-file`, et c'est
+    l'agent qui lance le process. Le fichier de la moulinette est repasse tel
+    quel, les deux cotes le validant avec le meme `MBPPTaskInput`. Chemins
+    absolus et `shlex.quote` : `Sandbox` fait un `shlex.split`, et le serveur
+    ne tourne pas depuis notre repertoire courant.
     """
     return (
         f"{shlex.quote(sys.executable)} {shlex.quote(str(MCP_SERVER))}"
@@ -83,16 +78,14 @@ def default_conf(
 ) -> AgentLoopConf:
     """Conf de l'agent, avec les limites MBPP du sujet.
 
-    `models_name` a un seul element quand --model-name est donne : sinon
-    AgentLoopConf tire au hasard dans le pool et la moulinette n'obtient pas
-    le modele demande.
-
-    `sandbox` est construit par l'appelant et non laisse au defaut
-    d'AgentLoopConf : ce defaut est un `Sandbox()` nu, sans serveur MCP, donc
-    sans `run_tests` ni manuel d'outils dans le prompt systeme.
+    Le llm est construit ici et non laisse au tirage d'`AgentLoopConf`, sinon
+    la moulinette n'obtient pas le `--model-name` demande. Meme raison pour le
+    `sandbox` : le defaut est un `Sandbox()` nu, sans serveur MCP donc sans
+    `run_tests`. `--provider-url` n'a d'effet qu'avec `--model-name`, le
+    modele designant le fournisseur.
     """
-    llm = GeminiLLM(model_name) if model_name else None
-    conf = AgentLoopConf(
+    llm = make_llm(model_name, provider_url) if model_name else None
+    return AgentLoopConf(
         llm=llm,
         sandbox=sandbox,
         system_prompt=SYSTEM_PROMPT_MBPP,
@@ -101,9 +94,6 @@ def default_conf(
         max_output_tokens=MAX_OUTPUT_TOKENS,
         max_wall_time_seconds=MAX_WALL_TIME_SECONDS,
     )
-    if provider_url:
-        conf.api_url = provider_url
-    return conf
 
 
 def write_output(out: SolutionOutput, path: Path) -> None:
@@ -134,12 +124,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def main() -> None:
     args = parse_args()
 
     if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GROQ_API_KEY")):
         print("aucune cle API dans l'environnement : remplis .env", file=sys.stderr)
-        return 1
+        return
 
     task = load_task(args.task_file)
     sandbox = Sandbox(command_stdio=mcp_stdio_command(args.task_file))
@@ -150,9 +140,11 @@ def main() -> int:
             task_id=str(task.task_id),
             benchmark="mbpp",
             user_prompt=build_user_prompt(task),
+            resume=False,
         )
     finally:
         conf.sandbox.close()
+    print(out.solution)
     if not out.solution:
         for step in reversed(out.steps):
             if step.sandbox_input:
@@ -161,8 +153,10 @@ def main() -> int:
 
     write_output(out, args.output)
     display(out)
-    return 0 if out.success else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        main()
+    except (KeyboardInterrupt, SystemExit) as e:
+        print(f"error: {e}")
