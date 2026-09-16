@@ -4,7 +4,12 @@
 appaire avec l'endpoint et la variable de cle de son fournisseur.
 """
 
-from .provider import DEFAULT_MAX_TOKENS, LLMProvider, OpenAICompatibleProvider
+from .provider import (
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_TEMPERATURE,
+    LLMProvider,
+    OpenAICompatibleProvider,
+)
 from .registry import (
     PROVIDERS,
     ProviderSpec,
@@ -14,6 +19,7 @@ from .registry import (
 
 __all__ = [
     "DEFAULT_MAX_TOKENS",
+    "DEFAULT_TEMPERATURE",
     "PROVIDERS",
     "LLMProvider",
     "OpenAICompatibleProvider",

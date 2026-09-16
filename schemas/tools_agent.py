@@ -42,6 +42,20 @@ RELAIS_MODELE = (
 
 
 # --------------------------------------------------------------------------
+# Terminateur de tour, ecrit tel quel dans SYSTEM_PROMPT_MBPP ci-dessous et
+# passe au LLM comme sequence d'arret. Les deux DOIVENT rester identiques :
+# le modele est coupe la ou le prompt lui dit de s'arreter.
+#
+# Sans cet arret, un modele peut poursuivre apres son bloc, inventer une
+# ligne "Observation:" qu'il n'a jamais recue, puis enchainer un second bloc.
+# Or extract_code() retient le DERNIER bloc : c'est le code halluciné qui
+# serait execute, et final_answer() pourrait partir sans qu'aucun test n'ait
+# reellement tourne.
+# --------------------------------------------------------------------------
+END_CODE = "<end_code>"
+STOP_SEQUENCES = [END_CODE]
+
+# --------------------------------------------------------------------------
 # Prompt systeme MBPP.
 #
 # Budget : 6000 tokens d'ENTREE cumules sur toute la tache. Chaque requete
