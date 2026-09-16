@@ -1,3 +1,13 @@
+"""The Sandbox: isolated execution of LLM-generated Python code.
+
+Each `execute()` call runs the given code in a fresh `multiprocessing.Process`
+under hard resource limits (timeout, RAM, open files, process count), with
+variables persisted across calls via a `dill`-serialized namespace rather
+than by keeping the process itself alive. MCP tools reachable from that
+namespace are proxied over a request/response Queue pair to a bridge thread
+running in this (the parent) process — see `mcp_bridge.py`.
+"""
+
 from __future__ import annotations
 
 import resource
@@ -32,7 +42,24 @@ class Sandbox(
     SandboxMCPBridgeMixin,
     SandboxProtocol,
 ):
+    """Isolated Python execution environment, wrapping an optional MCP client.
+
+    Satisfies `SandboxProtocol`: `execute(code) -> ExecutionResult`,
+    `get_manual() -> str`, `close()`. The sandbox wraps the MCP client, not
+    the other way around — connecting a different MCP server changes which
+    tools show up in the namespace and in `get_manual()`, with no tool name
+    ever hardcoded here.
+    """
+
     class _FinalAnswer(Exception):
+        """Raised by `_final_answer` to unwind `exec()` with a final value.
+
+        Caught in `_worker`, which turns it into
+        `ExecutionResult.final_answer` — this is how `final_answer(value)`
+        (always present in the namespace, independent of any MCP tool)
+        stops the agent loop.
+        """
+
         def __init__(self, value: Any) -> None:
             self.value = value
 
@@ -42,6 +69,17 @@ class Sandbox(
         command_stdio: str | None = None,
         config: SandboxConfig | None = None,
     ) -> None:
+        """Build the sandbox, optionally connecting an MCP server.
+
+        Args:
+            url: HTTP URL of an MCP server to connect to.
+            command_stdio: Shell command launching an MCP server over
+                stdio. Ignored if `url` is set. If neither `url` nor
+                `command_stdio` is given, the sandbox runs with no MCP
+                tools at all — `final_answer` is still available.
+            config: Sandbox limits/allowlists. Defaults to
+                `SandboxConfig()` (its own built-in defaults) if omitted.
+        """
         if config:
             self.config = config
         else:
@@ -69,11 +107,13 @@ class Sandbox(
                 )
         self.tool_names: list[str] = [tool.name for tool in self._tools]
         self._tool_param_names: dict[str, list[str]] = {}
+        self._tool_docs: dict[str, str] = {}
         for tool in self._tools:
             properties: dict[str, Any] = (
                 tool.input_schema.get("properties") or {}
             )
             self._tool_param_names[tool.name] = list(properties.keys())
+            self._tool_docs[tool.name] = tool.description or ""
         self._mcp_requests: Queue[Any] = Queue()
         self._mcp_responses: Queue[Any] = Queue()
         self._mcp_wait_total: float = 0.0
@@ -87,6 +127,18 @@ class Sandbox(
 
     @staticmethod
     def _timeout_handler(signum: int, frame: FrameType | None) -> None:
+        """Signal handler that converts SIGTERM into a `TimeoutError`.
+
+        Args:
+            signum: The signal number received (expected: `SIGTERM`,
+                sent by the parent when a worker overruns its timeout).
+            frame: The interrupted stack frame, unused.
+
+        Raises:
+            TimeoutError: Always, so `_worker`'s `exec()` unwinds and
+                still reports partial stdout/stderr instead of just
+                dying silently.
+        """
         raise TimeoutError
 
     def _get_stdout_stderr(
@@ -94,6 +146,19 @@ class Sandbox(
         temp_stdout: IO[str],
         temp_stderr: IO[str],
     ) -> tuple[str, str, bool]:
+        """Read back and truncate the worker's captured output streams.
+
+        Args:
+            temp_stdout: Temporary file the worker's stdout was
+                redirected into.
+            temp_stderr: Temporary file the worker's stderr was
+                redirected into.
+
+        Returns:
+            A `(stdout, stderr, truncated)` triple, each stream capped
+            at `config.max_output_length` characters; `truncated` is
+            True if either stream actually exceeded that length.
+        """
         temp_stdout.seek(0)
         temp_stderr.seek(0)
         content_stdout = temp_stdout.read()
@@ -107,6 +172,16 @@ class Sandbox(
         return stdout, stderr, truncated
 
     def _final_answer(self, answer: Any) -> None:
+        """Implementation of the `final_answer(value)` sandbox builtin.
+
+        Args:
+            answer: The value the sandboxed code wants to submit.
+
+        Raises:
+            _FinalAnswer: Always — caught in `_worker`, which is how
+                this stops the current `execute()` call and reports
+                `answer` back as `ExecutionResult.final_answer`.
+        """
         raise self._FinalAnswer(answer)
 
     def _worker(
@@ -122,7 +197,40 @@ class Sandbox(
         tool_names: list[str],
         generation_nb: int,
         tool_param_names: dict[str, list[str]],
+        tool_docs: dict[str, str],
     ) -> None:
+        """Process entry point: apply restrictions, run `code`, report back.
+
+        Runs in a brand-new `multiprocessing.Process` spawned by
+        `execute()`. Everything here executes with the sandbox's
+        restrictions already active — imports, filesystem, network,
+        memory/process/file-descriptor limits — before `code` itself
+        ever runs.
+
+        Args:
+            code: The Python source to execute.
+            namespace: The persisted namespace dict to restore into
+                (from the previous call), then execute `code` against.
+            namespace_save: `dill`-serialized namespace from the
+                previous call, or None on the first call.
+            queue: Channel to send the `(ExecutionResult, saved_bytes)`
+                pair back to the parent.
+            temp_stderr: Temp file `code`'s stderr is redirected into.
+            temp_stdout: Temp file `code`'s stdout is redirected into.
+            tool_requests: Queue this worker sends MCP tool call
+                requests on.
+            tool_responses: Queue this worker reads MCP tool call
+                results from.
+            tool_names: Names of the connected MCP server's tools —
+                each gets a proxy function injected into `namespace`.
+            generation_nb: This `execute()` call's generation number,
+                tagged onto every tool request so late responses from a
+                killed/timed-out previous call can't be misrouted here.
+            tool_param_names: Tool name -> ordered parameter names, so
+                proxies can accept positional arguments.
+            tool_docs: Tool name -> description, propagated onto each
+                proxy's `__doc__` (see `_make_tool_proxy`).
+        """
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
         limit_bytes = self.config.max_memory_mb * 1024 * 1024
@@ -145,6 +253,7 @@ class Sandbox(
                 tool_responses,
                 generation_nb,
                 tool_param_names,
+                tool_docs,
             )
         if self.mcp_client:
 
@@ -202,6 +311,22 @@ class Sandbox(
         queue.put((result, saved))
 
     def execute(self, code: str) -> ExecutionResult:
+        """Run `code` in an isolated, resource-limited child process.
+
+        Args:
+            code: Python source to execute. Rejected up front (without
+                even spawning a process) if it fails to parse or
+                contains a disallowed dunder-attribute access.
+
+        Returns:
+            An `ExecutionResult` — `stdout`/`stderr` (possibly
+            truncated), `error` (a message for the LLM if something
+            went wrong), `final_answer` (set if the code called
+            `final_answer(...)`), `timed_out`, and `duration_ms`. Never
+            raises: a crashed or non-terminating worker still comes
+            back as an `ExecutionResult` with `error` set, never an
+            exception out of `execute()` itself.
+        """
         rslt_icns: str | None = self._is_code_not_safe(code)
         if rslt_icns:
             return ExecutionResult(error=rslt_icns, duration_ms=0.0)
@@ -227,6 +352,7 @@ class Sandbox(
                     self.tool_names,
                     self.generation_nb,
                     self._tool_param_names,
+                    self._tool_docs,
                 ),
             )
             result: ExecutionResult
@@ -261,6 +387,24 @@ class Sandbox(
         return result
 
     def _wait_for_worker(self, p: Process) -> bool:
+        """Wait for the worker, enforcing the timeout net of MCP wait time.
+
+        Args:
+            p: The worker process to wait on.
+
+        Returns:
+            True if the worker had to be force-killed (`terminate()`
+            then `kill()`) for overrunning `max_execution_time_seconds`;
+            False if it finished on its own.
+
+        Time spent blocked on an MCP tool call (tracked via
+        `_mcp_wait_total`/`_mcp_active_since`, updated by the bridge
+        thread) is subtracted from the elapsed time before comparing
+        against the limit — MCP tool calls run outside the sandbox and
+        aren't subject to its timeout, so a legitimately slow tool
+        (e.g. `run_tests` pulling a Docker image) doesn't cause a false
+        timeout here.
+        """
         offset: float = 0.0
         start: float = time.monotonic()
         while p.is_alive():
@@ -282,6 +426,12 @@ class Sandbox(
         return False
 
     def close(self) -> None:
+        """Tear down the MCP connection and bridge thread, if any.
+
+        Safe to call even when no MCP server was ever connected. Should
+        be called exactly once, when the sandbox itself is done with
+        (e.g. from the agent CLI's `finally`, or the REPL's).
+        """
         if self.mcp_client:
             self._mcp_requests.put(None)
             self.bridge_thread.join(timeout=1)

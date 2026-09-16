@@ -1,3 +1,9 @@
+"""`uv run sandbox` — a REPL for exercising the Sandbox on its own.
+
+Lets you poke at the sandbox's restrictions and, optionally, a connected
+MCP server's tools, without an LLM in the loop at all.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -11,6 +17,17 @@ from .core import Sandbox
 
 
 def main() -> None:
+    """Parse CLI args, build a `Sandbox`, and run the REPL loop.
+
+    Usage:
+        uv run sandbox [config.json] [--mcp-stdio "cmd"] [--mcp-server url]
+
+    Each line of input is executed and remembered in the same sandbox
+    namespace (variables persist across lines, like across an agent's
+    `execute()` calls). All sandbox restrictions (imports, filesystem,
+    timeout, RAM) are active. Type ``exit`` or press Ctrl+D to leave;
+    the sandbox is always closed on the way out.
+    """
     parser = argparse.ArgumentParser(prog="sandbox")
     parser.add_argument(
         "config",
