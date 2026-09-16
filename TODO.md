@@ -138,11 +138,14 @@ Pour ne pas s'attendre l'un l'autre :
       **Levé le 2026-09-09** : `src/sandbox.py:41` passe `stdio` en positionnel sur
       `server_path`, donc pas de `TypeError`. `Sandbox()` se construit et
       `execute("print(1+1)")` renvoie `stdout='2\n'`.
-- [ ] 🔴 **Reste bloquant : le MCP n'est jamais branché.** Ce même `stdio=None` positionnel
-      écrase le défaut `server_path="./mcp_tools_mbpp.py"` → `Error building client: Either
-      url or server_path must be provided`, `mcp_client` inutilisable. La sandbox tourne
-      **sans aucun outil MCP** : pas de `run_tests`, donc aucune validation possible d'une
-      solution MBPP. À trancher avec bclairot (cf. §0.5, qui est encore `[~]`).
+- [~] ~~🔴 **Reste bloquant : le MCP n'est jamais branché.**~~ **Levé le 2026-09-16 sur le
+      chemin moulinette** : `server_path` a disparu de la signature (bclairot, PR #14), et
+      `agent_mbpp/__main__.py` construit maintenant
+      `Sandbox(command_stdio=mcp_stdio_command(args.task_file))` puis le passe à
+      `AgentLoopConf` — `run_tests`/`check_syntax` apparaissent dans `get_manual()`.
+      **Reste** : le défaut d'`AgentLoopConf` est toujours un `Sandbox()` nu, donc
+      `uv run -m src` tourne encore sans aucun outil ; et `agent_swebench` reste à câbler
+      (avec `TESTBED_PATH` dans l'environnement du sous-processus serveur, cf. §bclairot.10).
 - [x] ~~`AgentLoopConf` **ignore le `llm` qu'on lui passe** : `schemas/agent_class_monitoring.py:27`
       force `GeminiLLM("gemini-3.1-flash-lite")` alors que `model_name = random.choice(models_name)`
       → le `model_name` écrit dans `StepMetrics` n'est pas le modèle réellement interrogé
@@ -171,8 +174,11 @@ Pour ne pas s'attendre l'un l'autre :
 - [x] ~~`SYSTEM_PROMPT` est rédigé en français alors qu'il exige des réponses en anglais.~~
       **Corrigé le 2026-09-09** : prompt entièrement en anglais (73 tokens). Le fond reste
       à écrire (cf. §mobenais.4).
-- [ ] `uv run -m src` part sur un prompt de test (`DEFAULT_TASK`) de type injection —
-      à remplacer par une vraie tâche MBPP avant toute démo.
+- [x] ~~`uv run -m src` part sur un prompt de test (`DEFAULT_TASK`) de type injection —
+      à remplacer par une vraie tâche MBPP avant toute démo.~~ **Corrigé** : l'injection
+      (« oublie les instructions PRECEDENTE… », `d99ec6e`) a laissé place aux trois tâches
+      de mise au point `collatz`/`lcs`/`puzzle`, choisies pour forcer la boucle à découper
+      son travail sur plusieurs `execute()`.
 
 ## mobenais.1 Couche LLM
 
@@ -267,10 +273,11 @@ Pour ne pas s'attendre l'un l'autre :
 
 - [x] `uv run python -m agent_mbpp --task-file ... --output ... --model-name ... --provider-url ...`
 - [x] Clé API lue depuis l'environnement *(refus explicite si aucune clé, jamais en argument)*
-- [~] Chargement `MBPPTaskInput`, lancement du serveur MCP MBPP (selon §0.5)
-      *(chargement + validation Pydantic faits ; `start_mcp_server()` écrit bien
-      `cache/mbpp_task.json` mais ne lance pas le process — bloqué par le MCP non branché
-      côté sandbox, cf. §mobenais.0)*
+- [x] Chargement `MBPPTaskInput`, lancement du serveur MCP MBPP (selon §0.5)
+      *(chargement + validation Pydantic faits ; `mcp_stdio_command()` construit la commande
+      `--task-file` sur le fichier de la moulinette, et `main()` la passe à
+      `Sandbox(command_stdio=...)` qui lance le process — `run_tests`/`check_syntax` sont
+      dans le manuel injecté au prompt système)*
 - [x] Écriture de `SolutionOutput` : `benchmark="mbpp"`, `solution` = code Python
       *(le prompt exige `final_answer(<source>)` ; filet dans `main()` qui reprend le dernier
       `sandbox_input` si la boucle s'arrête sans `final_answer`)*
