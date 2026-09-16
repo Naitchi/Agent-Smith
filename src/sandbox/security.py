@@ -1,3 +1,9 @@
+"""Sandbox security primitives: import, filesystem and attribute allowlists.
+
+Everything here is stdlib-only (no `RestrictedPython` or similar) and runs
+inside the worker process, on the LLM-generated code it's asked to execute.
+"""
+
 from __future__ import annotations
 
 import ast
@@ -24,6 +30,26 @@ class SandboxSecurityMixin:
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> types.ModuleType:
+        """Import allowlist, installed in place of the `__import__` builtin.
+
+        Args:
+            name: Module being imported (e.g. ``"math"`` or ``"os.path"``).
+            globals: Passed through to the real `__import__`, unused here.
+            locals: Passed through to the real `__import__`, unused here.
+            fromlist: Names requested via ``from name import fromlist``;
+                each submodule pulled in this way is checked too.
+            level: Relative-import level, passed through unchanged.
+
+        Returns:
+            The imported module, with any unauthorized submodule pulled in
+            via `fromlist` stripped back out of it and `sys.modules`.
+
+        Raises:
+            ImportError: If `name` (or, for a dotted name, its top-level
+                package) isn't in `config.authorized_imports` — a
+                ``"pkg.*"`` entry authorizes `pkg`'s submodules too — or if
+                any name in `fromlist` resolves to an unauthorized submodule.
+        """
         if "." in name:
             if f"{name.split('.')[0]}.*" not in self.config.authorized_imports:
                 raise ImportError(
@@ -62,6 +88,24 @@ class SandboxSecurityMixin:
         closefd: bool = True,
         opener: Callable[[str, int], int] | None = None,
     ) -> IO[str] | IO[bytes]:
+        """Filesystem allowlist, installed in place of the `open` builtin.
+
+        Args:
+            file: Path to open.
+            mode, buffering, encoding, errors, newline, closefd, opener:
+                Forwarded as-is to the real `builtins.open` once `file`
+                clears the allowlist check.
+
+        Returns:
+            The open file handle, exactly as `builtins.open` would return
+            it.
+
+        Raises:
+            PermissionError: If `file`'s real path (after resolving `..`
+                and symlinks via `os.path.realpath`, so a traversal like
+                ``/testbed/../etc/passwd`` can't escape the check) isn't
+                inside one of `config.allowed_directories`.
+        """
         real_path = os.path.realpath(file)
         for allowed_dir in self.config.allowed_directories:
             if real_path == allowed_dir or real_path.startswith(
@@ -82,6 +126,18 @@ class SandboxSecurityMixin:
         )
 
     def _check_disallowed_attributes(self, node: ast.AST) -> bool:
+        """Check one AST node for a dunder-attribute sandbox escape.
+
+        Args:
+            node: An `ast.Call` (on an attribute) or `ast.Attribute` node
+                from a parsed code tree.
+
+        Returns:
+            True if the node accesses a dunder attribute (e.g.
+            ``__class__``, ``__bases__``, ``__subclasses__``) that isn't
+            explicitly in `config.authorized_attributes` — the classic
+            ``().__class__.__bases__[0].__subclasses__()`` escape route.
+        """
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -96,6 +152,18 @@ class SandboxSecurityMixin:
         )
 
     def _is_code_not_safe(self, code: str) -> str | None:
+        """Parse `code` and scan it for disallowed dunder-attribute access.
+
+        Args:
+            code: The Python source about to be executed.
+
+        Returns:
+            None if `code` parses and contains no disallowed attribute
+            access; otherwise a human-readable error string (syntax error
+            message, or a generic "disallowed operations" notice — this
+            check runs before execution, so which particular attribute
+            tripped it isn't surfaced to the caller).
+        """
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
@@ -114,6 +182,16 @@ class SandboxSecurityMixin:
 
     @staticmethod
     def _blocked_call(*args: Any, **kwargs: Any) -> None:
+        """Stand-in for `socket.socket` inside the worker process.
+
+        Args:
+            *args: Ignored.
+            **kwargs: Ignored.
+
+        Raises:
+            PermissionError: Always — this is what makes network access
+                unavailable to sandboxed code.
+        """
         raise PermissionError(
             "Error: Network access is disabled in the sandbox."
         )
