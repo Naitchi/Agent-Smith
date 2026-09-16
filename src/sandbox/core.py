@@ -69,11 +69,13 @@ class Sandbox(
                 )
         self.tool_names: list[str] = [tool.name for tool in self._tools]
         self._tool_param_names: dict[str, list[str]] = {}
+        self._tool_docs: dict[str, str] = {}
         for tool in self._tools:
             properties: dict[str, Any] = (
                 tool.input_schema.get("properties") or {}
             )
             self._tool_param_names[tool.name] = list(properties.keys())
+            self._tool_docs[tool.name] = tool.description or ""
         self._mcp_requests: Queue[Any] = Queue()
         self._mcp_responses: Queue[Any] = Queue()
         self._mcp_wait_total: float = 0.0
@@ -122,6 +124,7 @@ class Sandbox(
         tool_names: list[str],
         generation_nb: int,
         tool_param_names: dict[str, list[str]],
+        tool_docs: dict[str, str],
     ) -> None:
         socket.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
@@ -145,6 +148,7 @@ class Sandbox(
                 tool_responses,
                 generation_nb,
                 tool_param_names,
+                tool_docs,
             )
         if self.mcp_client:
 
@@ -227,6 +231,7 @@ class Sandbox(
                     self.tool_names,
                     self.generation_nb,
                     self._tool_param_names,
+                    self._tool_docs,
                 ),
             )
             result: ExecutionResult

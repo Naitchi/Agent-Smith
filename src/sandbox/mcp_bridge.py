@@ -190,6 +190,7 @@ class SandboxMCPBridgeMixin:
         response_q: Queue[Any],
         generation_nb: int,
         tool_param_names: dict[str, list[str]],
+        tool_docs: dict[str, str],
     ) -> Callable[..., Any]:
         def proxy(*args: Any, **kwargs: Any) -> Any:
             params: list[str] = tool_param_names.get(name, [])
@@ -212,6 +213,8 @@ class SandboxMCPBridgeMixin:
                 )
             return payload
 
+        proxy.__name__ = name
+        proxy.__doc__ = tool_docs.get(name, "")
         return proxy
 
     def _format_tool(self, tool: Tool) -> str:
