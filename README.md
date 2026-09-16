@@ -2,6 +2,17 @@
 
 # Agent Smith
 
+## Table of Contents
+
+- [Description](#description)
+- [Instructions](#instructions)
+- [Resources](#resources)
+- [System Architecture](#system-architecture)
+- [Agent Loop](#agent-loop)
+- [Sandbox Design](#sandbox-design)
+- [Tool Implementation Details](#tool-implementation-details)
+- [Benchmark Results and Analysis](#benchmark-results-and-analysis)
+
 ## Description
 
 Agent Smith is an autonomous coding agent, built and evaluated against two benchmarks:
