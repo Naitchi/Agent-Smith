@@ -5,6 +5,9 @@ install:
 run:
 	uv run -m src
 
+run_mbpp:
+	uv run python -m agent_mbpp --task-file 
+
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name "backup_memory" -exec rm -rf {} +
@@ -12,3 +15,4 @@ clean:
 	rm .env
 	echo "GROQ_API_KEY=" > .env.example
 	echo "GEMINI_API_KEY=" >> .env.example
+	echo "TESTBED_PATH=" >> .env.example
