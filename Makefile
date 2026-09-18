@@ -18,6 +18,10 @@ run_mbpp:
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type d -name "backup_memory" -exec rm -rf {} + 
+
+fclean:
+	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name "backup_memory" -exec rm -rf {} +
 	rm -rf .venv
 	rm .env
