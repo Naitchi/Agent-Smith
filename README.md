@@ -241,14 +241,6 @@ Python function in the sandbox namespace via `_make_tool_proxy`, with no tool na
 ever hardcoded — connecting a different MCP server changes the available
 functions and the generated manual (`get_manual()`) automatically.
 
-> **TODO (bclairot):**
-> - Only `open()` is wrapped for filesystem access — `os.open`, `pathlib.Path.open`
->   and `shutil.*` can still bypass the directory allowlist.
-> - Only `socket.socket` is neutralized for network access — not yet verified
->   whether `socket.create_connection` is covered as a side effect.
-> - 2 of the 5 mandatory `ExecutionResult.error` feedback cases aren't wired up
->   yet ("no valid code block found", "malformed block interpreted anyway").
-
 ## Tool Implementation Details
 
 ### MBPP (`mcp_tools_mbpp.py`)

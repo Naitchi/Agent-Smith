@@ -94,30 +94,21 @@ class SandboxProtocol(Protocol):
 - [x] Décider ensemble **comment le serveur MCP MBPP reçoit la tâche** (il a besoin
       de `test_list` pour `run_tests`). Retenu :
       `python mcp_tools_mbpp.py --task-file ../cache/mbpp_task.json`. mobenais lance le process.
-- [~] Même décision pour SWE-bench : comment le serveur reçoit `docker_image`,
+- [x] Même décision pour SWE-bench : comment le serveur reçoit `docker_image`,
       `eval_script`, `TESTBED_PATH` (env vars ou args CLI). `mcp_tools_swebench.py`
       reprend la même convention `--task-file` que MBPP pour `docker_image`/
-      `eval_script` (via `SWEBenchTaskInput`) ; `TESTBED_PATH` n'est pas un champ
-      du schéma et reste à câbler.
+      `eval_script` (via `SWEBenchTaskInput`) ; `TESTBED_PATH` est lu depuis
+      `os.environ["TESTBED_PATH"]` dans `DockerManager.__init__`, exactement le
+      nom de variable imposé par le sujet (p.19). **Mais** : ce n'est vérifié que
+      quand le serveur est lancé en process direct — voir le nouveau point ouvert
+      dans bclairot.7 (la variable ne traverse pas la frontière `--mcp-stdio`).
 - [~] Décider qui construit l'objet `Sandbox` : mobenais dans son CLI, à partir des args
       `--mcp-stdio` / `--mcp-server`. CLI `sandbox` (bclairot) le construit et les args
       MCP sont maintenant branchés (`Sandbox(config=..., command_stdio=..., url=...)`) ;
       côté mobenais, `AgentLoopConf`/`src/__main__.py` construit encore un `Sandbox()`
       nu, sans jamais passer `--mcp-stdio`/`--mcp-server`.
 
-## 0.6 Les deux mocks de démarrage
-
-Pour ne pas s'attendre l'un l'autre :
-
-- [~] **bclairot fournit à mobenais un `FakeSandbox`** (10 lignes) dès le jour 1 : `execute()` fait
-      un `exec()` naïf, `get_manual()` renvoie un texte en dur. mobenais peut coder toute
-      sa boucle dessus. *(jamais livré ; la vraie `Sandbox` a servi directement — d'où le
-      bloquant mobenais.0)*
-- [ ] **mobenais fournit à bclairot un `scripts/fake_agent.py`** : un script qui envoie 3 blocs de
-      code en dur à la sandbox et affiche les `ExecutionResult`. bclairot teste sans LLM.
-      *(n'existe pas ; `scripts/test_mcp.py` (bclairot) teste le client MCP, pas la sandbox)*
-
-## 0.7 Répartition des fichiers (évite les conflits git)
+## 0.6 Répartition des fichiers (évite les conflits git)
 
 | Chemin | Propriétaire |
 |---|---|
@@ -331,7 +322,10 @@ Pour ne pas s'attendre l'un l'autre :
 - [x] `final_answer(answer)` injecté dans le namespace
   - [x] Implémentation typique : lève `_FinalAnswer(value)`, attrapée par `execute()`
   - [x] Toujours présent, indépendamment du serveur MCP connecté
-  - [ ] MBPP : `final_answer(code)` — SWE-bench : `final_answer(get_patch())`
+  - [x] MBPP : `final_answer(code)` — SWE-bench : `final_answer(get_patch())`
+        (documenté explicitement dans les prompts `mbpp_methodology`/
+        `swebench_methodology` de chaque serveur MCP — pas la sandbox elle-même,
+        mais c'est bien de là que l'agent doit l'apprendre)
 
 ## bclairot.2 Sécurité — chaque point est testé par `exam_sandbox.sh` (tout-ou-rien)
 
@@ -364,19 +358,29 @@ Pour ne pas s'attendre l'un l'autre :
 - [x] Trancher : `exec()` in-process vs `subprocess` / `multiprocessing` → **`multiprocessing.Process` + `dill` pour l'état**
   - in-process : simple, mais timeout dur et RLIMIT difficiles à appliquer proprement
   - process séparé : vraie frontière, timeout par `kill`, mais il faut sérialiser l'état
-- [ ] Documenter le trade-off dans le README
+- [x] Documenter le trade-off dans le README (section "Sandbox Design")
 
 ## bclairot.4 Feedback explicite au LLM — 5 cas obligatoires
 
 Le champ `error` de `ExecutionResult` doit couvrir :
 
-- [ ] Aucun bloc de code valide trouvé *(cas remonté par mobenais, format d'erreur à convenir — `extract_code` renvoie `None` mais rien ne construit encore l'observation d'erreur associée)*
-- [ ] Bloc mal formé mais interprété quand même → **expliquer comment**
+- [x] Aucun bloc de code valide trouvé (fait côté mobenais, `src/agent_loop.py:179-181` :
+      `if code is None: sandbox_output = "No valid code block was found in the
+      model's response."` — pas dans `ExecutionResult.error` à proprement parler
+      puisque `sandbox.execute()` n'est jamais appelé dans ce cas, mais l'agent
+      reçoit bien un message explicite)
+- [ ] Bloc mal formé mais interprété quand même → **expliquer comment** (toujours
+      pas fait — `extract_code` ne signale jamais qu'il a pris un bloc sans tag
+      de langage reconnu ; fix esquissé mais pas appliqué, vu que c'est le fichier
+      de mobenais)
 - [x] Timeout atteint → indiquer que la sortie est partielle (`result.timed_out=True` +
       `error="Error: Execution timed out."`, stdout/stderr partiels tout de même capturés)
 - [x] Sortie d'outil tronquée → le dire explicitement (`ExecutionResult.truncated` bool,
       posé par `_get_stdout_stderr`)
-- [ ] Édition ayant introduit une erreur de syntaxe / lint *(dépend de `edit_file`, pas encore écrit — bclairot.9)*
+- [ ] Édition ayant introduit une erreur de syntaxe / lint — `edit_file` **existe
+      maintenant** (bclairot.9 fini) mais ne valide toujours aucune syntaxe après
+      remplacement, donc ce cas reste ouvert pour de vrai cette fois (plus bloqué
+      par "pas encore écrit")
 
 > *« The LLM should never be left guessing about what happened. »*
 
@@ -404,6 +408,10 @@ Le champ `error` de `ExecutionResult` doit couvrir :
   - [~] `final_answer` documenté à part (ce n'est pas un outil MCP) (mentionné dans le texte figé)
   - [x] Rappel des imports autorisés et des répertoires accessibles
 - [ ] **Test** : connecter un autre serveur MCP → le manuel change tout seul
+      (partiellement vérifié : `get_manual()` reflète bien dynamiquement les
+      tools de `mcp_tools_mbpp.py` en vrai ; le test équivalent avec
+      `mcp_tools_swebench.py` échoue à cause du nouveau bug `TESTBED_PATH` ci-dessous,
+      pas à cause de `get_manual()` lui-même)
 
 ## bclairot.7 Client MCP
 
@@ -421,11 +429,25 @@ Le champ `error` de `ExecutionResult` doit couvrir :
       l'équivalent est réparti entre `Sandbox._make_tool_proxy` (un outil) et
       `SandboxMCPBridgeMixin.proxy_*`/`make_mcp_proxy` (resources/prompts), tous deux
       appelés depuis `_worker` pour peupler `namespace`
-  - [ ] Une fonction Python par outil, avec `__name__` et `__doc__` corrects — **pas fait** :
-        `_make_tool_proxy` renvoie une closure nommée `proxy` sans `__name__`/`__doc__`
-        réassignés vers ceux de l'outil MCP réel
+  - [x] Une fonction Python par outil, avec `__name__` et `__doc__` corrects — **fait** :
+        `_make_tool_proxy` reçoit maintenant un `tool_docs` en plus de
+        `tool_param_names`, et assigne `proxy.__name__ = name` /
+        `proxy.__doc__ = tool_docs.get(name, "")` avant de retourner la closure.
+        Vérifié en vrai (sandbox connectée à `mcp_tools_mbpp.py`, `run_tests.__name__`
+        et `.__doc__` corrects dans le process enfant).
   - [x] Injectée dans le namespace sandbox (`namespace[name] = self._make_tool_proxy(...)`)
   - [x] **Aucun nom d'outil hardcodé** (tout vient de `tool_names`/`self._tools` obtenus dynamiquement)
+  - [ ] **Nouveau bug trouvé (2026-09-16)** : `TESTBED_PATH` (et toute variable
+        d'env côté parent) ne traverse pas la frontière stdio. `mcp.stdio_client`
+        n'hérite que d'une allowlist fixe (`HOME, LOGNAME, PATH, SHELL, TERM, USER`
+        sous POSIX — `mcp/client/stdio.py:get_default_environment`), et
+        `MCPClient.build_client()` ne passe aucun `env=` à `StdioServerParameters`
+        pour compenser. Donc lancer `mcp_tools_swebench.py` via
+        `--mcp-stdio`/`Sandbox(command_stdio=...)` plante avec
+        `RuntimeError: no environment variable TESTBED_PATH set`, même si la
+        variable est bien définie côté process parent. Fix : passer
+        `env=os.environ.copy()` (ou au moins fusionner ce qu'il faut) à
+        `StdioServerParameters` dans `build_client()`.
 
 ## bclairot.8 `mcp_tools_mbpp.py`
 
@@ -433,38 +455,52 @@ Le champ `error` de `ExecutionResult` doit couvrir :
 - [x] Réception de la tâche selon la convention figée en §0.5
 - [x] Outils additionnels libres (ex. `lint(code)`)
 
-## bclairot.9 `mcp_tools_swebench.py` — les 9 outils obligatoires
+## bclairot.9 `mcp_tools_swebench.py` — les 9 outils obligatoires ✅ fini, testé sur un vrai Docker
 
 Testés **indépendamment de l'agent** : ils doivent marcher seuls.
 
 **Filesystem**
-- [ ] `read_file(filepath, start_line, end_line)` → format `cat -n` : `<line_number>: <line_content>`
-- [ ] `edit_file(filepath, old_str, new_str)` — remplacement exact
-  - [ ] Erreur explicite si `old_str` absent **ou** présent plusieurs fois
-- [ ] `list_files(directory, pattern)`
+- [x] `read_file(filepath, start_line, end_line)` → format `cat -n` : `<line_number>: <line_content>`
+- [x] `edit_file(filepath, old_str, new_str)` — remplacement exact
+  - [x] Erreur explicite si `old_str` absent **ou** présent plusieurs fois
+- [x] `list_files(directory, pattern)`
 
 **Recherche** — format imposé : `/absolute/path.py:<line_number> <line_content>`
-- [ ] `search_code(pattern, file_pattern)`
-- [ ] `search_function_or_class_definition_in_code(name)`
-- [ ] `find_references(name, filepath, line)`
+- [x] `search_code(pattern, file_pattern)`
+- [x] `search_function_or_class_definition_in_code(name)`
+- [x] `find_references(name, filepath, line)`
 
 **Exécution**
-- [ ] `run_tests()` — lance l'`eval_script`
-- [ ] `get_patch()` — **exactement** `git -c core.fileMode=false diff`
-- [ ] `run_command(command, workdir)` → stdout, stderr **et** exit code
+- [x] `run_tests()` — lance l'`eval_script`
+- [x] `get_patch()` — **exactement** `git -c core.fileMode=false diff`
+- [x] `run_command(command, workdir)` → stdout, stderr **et** exit code
 
-- [ ] Troncature des sorties volumineuses + message indiquant la troncature
+- [x] Troncature des sorties volumineuses + message indiquant la troncature
+      (`MCPServerSWEBench._truncate`/`_format_result`)
 
-## bclairot.10 Docker (SWE-bench)
+Testé en vrai de bout en bout (pas juste lu) : `edit_file` → `run_tests` (passe) →
+`get_patch` (diff propre) sur le testbed local. Voir la mémoire de session pour le
+détail des bugs trouvés en cours de route (grep `-e`, mauvais index de tuple,
+`workdir` relatif rejeté par Docker, `.git/` pollué dans `find_references`...).
 
-- [ ] `class DockerManager`
-  - [ ] `pull(image)` / `start(image, testbed_path)`
-  - [ ] `exec(command, workdir) -> (stdout, stderr, exit_code)`
-  - [ ] `cleanup()` — **obligatoire**, y compris sur exception et Ctrl+C (`try/finally` + handler signal)
-- [ ] Choisir et documenter : sandbox **dans** le conteneur, ou sur l'hôte avec les outils MCP qui font le pont
-- [ ] Contraintes de sécurité sandbox appliquées **dans les deux cas**
-- [ ] Montage éventuel de `${TESTBED_PATH}`
+## bclairot.10 Docker (SWE-bench) ✅ fini
+
+- [x] `class DockerManager`
+  - [x] `pull(image)` / `start(image, testbed_path)` → `pull_image()`/`run_container()`
+  - [x] `exec(command, workdir) -> (stdout, stderr, exit_code)` (ordre réel :
+        `(exit_code, stdout, stderr)`, mais les 3 infos sont bien là)
+  - [x] `cleanup()` — **obligatoire**, y compris sur exception et Ctrl+C : câblé sur
+        `SIGTERM`/`SIGINT` dans `mcp_tools_swebench.py` (`MCPServerSWEBench.close()`)
+- [x] Choisir et documenter : sandbox **dans** le conteneur, ou sur l'hôte avec les outils MCP qui font le pont
+      (Option B retenue et documentée dans le README, section "Tool Implementation Details")
+- [x] Contraintes de sécurité sandbox appliquées **dans les deux cas** — cohérent par
+      construction : la même `Sandbox` (avec toutes ses restrictions) tourne qu'elle
+      soit connectée à `mcp_tools_mbpp.py` ou `mcp_tools_swebench.py`
+- [x] Montage éventuel de `${TESTBED_PATH}` — pas un montage Docker, mais résolu
+      quand même : lu depuis la variable d'env `TESTBED_PATH` (imposée par le sujet)
+      plutôt que déduit de l'image
 - [ ] Dépendances additionnelles possibles dans le conteneur (`ruff`, `jedi`, `tree`)
+      — pas fait, optionnel selon le sujet
 
 ---
 
