@@ -283,9 +283,7 @@ class MCPServerSWEBench:
             """
             root = self.docker_manager.workdir
             full_path = (
-                filepath
-                if filepath.startswith("/")
-                else f"{root}/{filepath}"
+                filepath if filepath.startswith("/") else f"{root}/{filepath}"
             )
             return self._format_result(
                 *self.docker_manager.exec(
@@ -449,6 +447,12 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Error loading task file: {e}", file=sys.stderr)
             sys.exit(1)
+    if task is None:
+        print(
+            "Error: --task-file is required to start this server.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     server = MCPServerSWEBench(task=task)
 
     def _handle_termination(signum: int, frame: FrameType | None) -> None:
@@ -457,8 +461,10 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGTERM, _handle_termination)
     signal.signal(signal.SIGINT, _handle_termination)
-
-    if args.http:
-        server.mcp.run("streamable-http", host=args.host, port=args.port)
-    else:
-        server.mcp.run()
+    try:
+        if args.http:
+            server.mcp.run("streamable-http", host=args.host, port=args.port)
+        else:
+            server.mcp.run()
+    finally:
+        server.close()
