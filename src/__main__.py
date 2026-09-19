@@ -15,16 +15,6 @@ from schemas import AgentLoopConf
 from .agent_loop import AgentLoop
 from .display_func import show_error, show_steps, show_summary
 
-# --------------------------------------------------------------------------
-# Taches de mise au point de la boucle agent.
-#
-# Elles ne sont PAS des taches de benchmark : elles servent a observer la
-# boucle sur un grand nombre d'iterations. Le critere de selection est qu'un
-# modele ne peut pas y repondre de memoire ni en un seul bloc de code : le
-# cout depasse le timeout sandbox, donc l'agent doit decouper son travail,
-# conserver son etat entre deux execute() et lire ses propres observations.
-# --------------------------------------------------------------------------
-
 uno = """\
 tell me your model name.
 """
