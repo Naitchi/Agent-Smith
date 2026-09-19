@@ -10,12 +10,10 @@ import os
 import sys
 
 from llm import make_llm
-from schemas import (
-    AgentLoopConf,
-    SolutionOutput,
-)
+from schemas import AgentLoopConf
 
 from .agent_loop import AgentLoop
+from .display_func import show_error, show_steps, show_summary
 
 # --------------------------------------------------------------------------
 # Taches de mise au point de la boucle agent.
@@ -28,28 +26,7 @@ from .agent_loop import AgentLoop
 # --------------------------------------------------------------------------
 
 uno = """\
-Count how many integers n in the range [1, 1000000] have a Collatz sequence \
-(n -> n/2 if even, n -> 3n+1 if odd, counting steps until reaching 1) whose \
-length is strictly greater than 250 steps.
-
-Constraints you must respect, they are part of the problem:
-- The sandbox kills any single code execution that runs longer than 25 seconds. \
-Scanning the whole range in one execution WILL be killed, so split the range \
-into chunks and process one chunk per step.
-- Variables persist between your code blocks. Use that: keep your running \
-counter, your current position in the range, and any memoization table in \
-module-level variables so the next step resumes where you stopped.
-- After each chunk, print your progress: last index processed, current count, \
-and the wall-clock time that chunk took. Use those numbers to size your next \
-chunk.
-- Watch your memory: the sandbox is limited to 512 MB. If a memoization table \
-grows too large you will get a MemoryError; adapt rather than restart.
-- Before answering, re-verify on a small independent sub-range (for example \
-[1, 10000]) recomputed without your memo table, and print both values.
-- Only then call final_answer(str(total)) with the exact integer.
-
-Do not guess the answer and do not answer from memory: the value must come \
-from code you actually ran in this session.
+tell me your model name.
 """
 
 dos = """\
@@ -115,32 +92,9 @@ def default_conf() -> AgentLoopConf:
     )
 
 
-def display(out: SolutionOutput) -> None:
-    for s in out.steps:
-        print(
-            f"\n--- step {s.step} "
-            f"({s.input_tokens} in / {s.output_tokens} out, "
-            f"{s.request_time_ms:.0f} ms) ---"
-        )
-        print(s.sandbox_input or "(aucun bloc de code)")
-        print(f"  -> {s.sandbox_output.strip()[:400]}")
-
-    print("\n" + "=" * 60)
-    print(f"success    : {out.success}")
-    print(f"solution   : {out.solution!r}")
-    print(f"iterations : {out.iterations}   requests: {out.total_requests}")
-    print(
-        f"tokens     : {out.total_input_tokens} in "
-        f"/ {out.total_output_tokens} out"
-    )
-    print(f"temps      : {out.total_time_seconds:.1f} s")
-    if out.error:
-        print(f"error      : {out.error}")
-
-
 def main() -> None:
     if not os.environ.get("GEMINI_API_KEY"):
-        print("GEMINI_API_KEY absent : `make install` puis remplis .env")
+        show_error("GEMINI_API_KEY absent : `make install` puis remplis .env")
         return
 
     arg = sys.argv[1] if len(sys.argv) > 1 else None
@@ -158,13 +112,14 @@ def main() -> None:
     finally:
         conf.sandbox.close()
 
-    display(out)
+    show_steps(out)
+    show_summary(out)
 
 
 if __name__ == "__main__":
     try:
         main()
     except (Exception, TimeoutError) as e:
-        print(f"Erreur inattendue : {type(e).__name__}: {e}")
+        show_error(f"Erreur inattendue : {type(e).__name__}: {e}")
     finally:
-        print("Fin du programme.")
+        show_error("Fin du programme.")
