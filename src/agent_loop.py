@@ -1,6 +1,5 @@
 from  __future__ import annotations
 import time, json, os, shutil, random
-from pathlib import Path
 import httpx
 from llm import PROVIDERS, make_llm
 from schemas import (AUTHORIZED_GEMINI,
@@ -28,11 +27,19 @@ from .display_func import (show_bascule,
                            )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-BACKUP_DIR = PROJECT_ROOT / "backup_memory"
-BACKUP_FILE = BACKUP_DIR / "backup.json"
-MAX_CONSECUTIVE_ERRORS = 3
-STATUS_BASCULE = {404, 408, 429, 500, 502, 503, 504}
+from schemas.tools_agent import (BACKUP_DIR,
+                                 BACKUP_FILE,
+                                 CHARS_PAR_TOKEN,
+                                 DEBUG_BASCULE,
+                                 FORCE_429_MODELS,
+                                 LAST_ITER_INTACTS,
+                                 MARGE_BUDGET,
+                                 MAX_CONSECUTIVE_ERRORS,
+                                 MAX_MANUAL_CHARS,
+                                 MAX_OBS_CHARS,
+                                 MAX_TOKENS_PAR_REQUETE,
+                                 STATUS_BASCULE,
+                                 )
 
 
 def backup_json(total_input_tokens: int, total_output_token: int, total_request: int, current_context: str, model_name: str,
@@ -79,8 +86,6 @@ def load_backup(task_id: str) -> dict | None:
     return res
 
 
-MAX_MANUAL_CHARS = 700
-
 
 def compact_manual(manual: str, max_chars: int = MAX_MANUAL_CHARS) -> str:
     if len(manual) <= max_chars:
@@ -92,7 +97,8 @@ def compact_manual(manual: str, max_chars: int = MAX_MANUAL_CHARS) -> str:
     return " ".join(garde)
 
 
-def tronc_message(message: list[dict], last_iter: int = 3, max_obs_chars: int = 100) -> list[dict]:
+def tronc_message(message: list[dict], last_iter: int = LAST_ITER_INTACTS,
+                  max_obs_chars: int = MAX_OBS_CHARS) -> list[dict]:
     """Vue allegee de l'historique, envoyee au LLM a la place de `message`.
 
     L'enonce (message[0]) et les `last_iter` derniers tours (assistant +
@@ -113,10 +119,6 @@ def tronc_message(message: list[dict], last_iter: int = 3, max_obs_chars: int = 
         vue.append(m)
     return vue + recents
 
-FORCE_429_MODELS = {
-    m.strip() for m in os.environ.get("FORCE_429_MODELS", "").split(",") if m.strip()
-}
-DEBUG_BASCULE = os.environ.get("DEBUG_BASCULE", "") not in ("", "0")
 
 
 def _fake_429(api_url: str) -> httpx.HTTPStatusError:
@@ -209,7 +211,7 @@ class AgentLoop:
         try:
             for step in range(len(steps) + 1, self.agent_loop.max_iterations + 1):
                 try:
-                    vue = tronc_message(message)
+                    vue = self.vue_dans_budget(message, self._prompt_systeme, total_input_tokens)
                     self.check_budget(start, total_input_tokens, total_output_token)
                     retries = 0
                     while True:
@@ -222,7 +224,8 @@ class AgentLoop:
                             if self.agent_loop.model_name in FORCE_429_MODELS:
                                 raise _fake_429(self.agent_loop.api_url)
                             result = self.agent_loop.llm(
-                                prompt_systeme, vue, stop=STOP_SEQUENCES
+                                prompt_systeme, vue, stop=STOP_SEQUENCES,
+                                max_tokens=self.plafond_sortie(total_output_token),
                             )
                             if DEBUG_BASCULE:
                                 show_llm_debug(step, self.agent_loop.model_name,
@@ -380,6 +383,35 @@ class AgentLoop:
                     str(e)
                 )
             )
+
+    def plafond_sortie(self, total_output_token: int) -> int:
+        """`max_tokens` de la prochaine requete : le budget de sortie restant."""
+        limite = self.agent_loop.max_output_tokens
+        if limite is None:
+            return MAX_TOKENS_PAR_REQUETE
+        return max(1, min(MAX_TOKENS_PAR_REQUETE, limite - total_output_token))
+
+    def vue_dans_budget(
+            self,
+            message: list[dict],
+            prompt_systeme: str,
+            total_input_tokens: int) -> list[dict]:
+        """Plus grande vue tronquee dont la requete reste sous `max_input_tokens`.
+
+        Reduit la fenetre (3, 2, puis 1 tour intact) tant que l'estimation de
+        la requete depasse le budget restant ; leve `MaxInputTokensError`
+        AVANT l'envoi si meme un seul tour ne rentre pas.
+        """
+        limite = self.agent_loop.max_input_tokens
+        for last_iter in range(LAST_ITER_INTACTS, 0, -1):
+            vue = tronc_message(message, last_iter=last_iter)
+            if limite is None:
+                return vue
+            chars = len(prompt_systeme) + sum(len(m["content"]) for m in vue)
+            estimation = chars // CHARS_PAR_TOKEN
+            if total_input_tokens + estimation <= limite * MARGE_BUDGET:
+                return vue
+        raise MaxInputTokensError(total_input_tokens + estimation, limite)
 
     def check_budget(
             self, 

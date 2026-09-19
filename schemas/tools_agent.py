@@ -1,3 +1,43 @@
+import os
+from pathlib import Path
+
+# ==========================================================================
+# Constantes globales du lot agent -- un seul endroit pour les regler.
+# ==========================================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+MBPP_MAX_ITERATIONS = 10
+MBPP_MAX_INPUT_TOKENS = 6_000
+MBPP_MAX_OUTPUT_TOKENS = 1_500
+MBPP_MAX_WALL_TIME_SECONDS = 120
+MBPP_MCP_SERVER = PROJECT_ROOT / "mcp_tools_mbpp.py"
+
+
+MAX_TOKENS_PAR_REQUETE = 2048
+
+DEFAULT_TEMPERATURE = 0.0
+
+
+MAX_CONSECUTIVE_ERRORS = 3
+STATUS_BASCULE = {404, 408, 429, 500, 502, 503, 504}
+MAX_MANUAL_CHARS = 700
+
+LAST_ITER_INTACTS = 3
+MAX_OBS_CHARS = 100
+CHARS_PAR_TOKEN = 4
+MARGE_BUDGET = 0.9
+
+BACKUP_DIR = PROJECT_ROOT / "backup_memory"
+BACKUP_FILE = BACKUP_DIR / "backup.json"
+
+
+# FORCE_429_MODELS = {
+#     m.strip() for m in os.environ.get("FORCE_429_MODELS", "").split(",") if m.strip()
+# }
+# DEBUG_BASCULE = os.environ.get("DEBUG_BASCULE", "") not in ("", "0")
+
+
 SYSTEM_PROMPT = """You solve programming tasks by writing Python.
 At each step, write a single Python code block inside a ```py fence.
 Use print() to inspect intermediate values.
@@ -10,8 +50,7 @@ Always write in English.
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
-# "qwen/qwen3.6-27b" retire le 2026-09-16 : 404 chez Groq, le modele n'existe
-# pas. Le garder faisait perdre une bascule a chaque tirage dessus.
+
 AUTHORIZED_GROQ = [
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
@@ -28,11 +67,7 @@ AUTHORIZED_GEMINI = [
 
 AUTHORIZED_LLM = AUTHORIZED_GROQ + AUTHORIZED_GEMINI
 
-# Note de cadrage ajoutee au prompt systeme apres une bascule de modele.
-# Le contenu des tours precedents n'a PAS a etre recopie ici : il est deja
-# transmis via la liste `message`, qui est repassee telle quelle au nouveau
-# modele. Cette phrase sert uniquement a lui dire que les tours `assistant`
-# de son historique ne sont pas de lui.
+
 RELAIS_MODELE = (
     "You are taking over an ongoing task from another model. "
     "The conversation above is your own history: continue from it, "
@@ -41,32 +76,10 @@ RELAIS_MODELE = (
 
 
 
-# --------------------------------------------------------------------------
-# Terminateur de tour, ecrit tel quel dans SYSTEM_PROMPT_MBPP ci-dessous et
-# passe au LLM comme sequence d'arret. Les deux DOIVENT rester identiques :
-# le modele est coupe la ou le prompt lui dit de s'arreter.
-#
-# Sans cet arret, un modele peut poursuivre apres son bloc, inventer une
-# ligne "Observation:" qu'il n'a jamais recue, puis enchainer un second bloc.
-# Or extract_code() retient le DERNIER bloc : c'est le code halluciné qui
-# serait execute, et final_answer() pourrait partir sans qu'aucun test n'ait
-# reellement tourne.
-# --------------------------------------------------------------------------
 END_CODE = "<end_code>"
 STOP_SEQUENCES = [END_CODE]
 
-# --------------------------------------------------------------------------
-# Prompt systeme MBPP.
-#
-# Budget : 6000 tokens d'ENTREE cumules sur toute la tache. Chaque requete
-# reemet le prompt systeme + tout l'historique, donc le cout total est
-# ~ N*(prompt + tache) + N(N-1)/2 * tour. A 350 tokens de prompt, 3 tours
-# coutent ~1800 : large. C'est la CONVERGENCE qui est optimisee ici, pas le
-# nombre d'iterations atteignables.
-#
-# Le manuel des outils n'est PAS ecrit ici : il est concatene a l'execution
-# depuis sandbox.get_manual() (cf. AgentLoop.run).
-# --------------------------------------------------------------------------
+
 SYSTEM_PROMPT_MBPP = """\
 You write one Python function, verify it against the given tests, and return \
 its source. You work in a stateful Python sandbox: variables persist between \

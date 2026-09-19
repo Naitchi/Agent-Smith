@@ -29,12 +29,13 @@ from src.agent_loop import AgentLoop
 from src.display_func import show_error, show_summary
 from src.sandbox import Sandbox
 
-MCP_SERVER = Path(__file__).resolve().parent.parent / "mcp_tools_mbpp.py"
-
-MAX_ITERATIONS = 10
-MAX_INPUT_TOKENS = 6_000
-MAX_OUTPUT_TOKENS = 1_500
-MAX_WALL_TIME_SECONDS = 120
+from schemas.tools_agent import (
+    MBPP_MAX_INPUT_TOKENS as MAX_INPUT_TOKENS,
+    MBPP_MAX_ITERATIONS as MAX_ITERATIONS,
+    MBPP_MAX_OUTPUT_TOKENS as MAX_OUTPUT_TOKENS,
+    MBPP_MAX_WALL_TIME_SECONDS as MAX_WALL_TIME_SECONDS,
+    MBPP_MCP_SERVER as MCP_SERVER,
+)
 
 
 def load_task(path: Path) -> MBPPTaskInput:
