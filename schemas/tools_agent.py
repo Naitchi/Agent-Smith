@@ -118,6 +118,9 @@ def create_newcontext(current_context: str, original_prompt: str, max_chars: int
     )
 
 
+def tronc_message(message: list[dict], last_iter: int = 3, max_obs_chars: int = 100) -> list[dict]:
+    pass
+
 
 def extract_code(text: str) -> str | None:
     """Retourne le dernier bloc de code, ou None s'il n'y en a pas."""

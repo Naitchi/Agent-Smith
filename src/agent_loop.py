@@ -12,6 +12,7 @@ from schemas import (AUTHORIZED_GEMINI,
                      MaxIterationsError,
                      MaxOutputTokensError,
                      MaxWallTimeError,
+                     NoModelAvailableError,
                      OutputParameter,
                      RELAIS_MODELE,
                      SigStopError,
@@ -20,6 +21,11 @@ from schemas import (AUTHORIZED_GEMINI,
                      StepMetrics,
                      extract_code
                      )
+from .display_func import (show_bascule,
+                           show_error,
+                           show_key_rotation,
+                           show_llm_debug,
+                           )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -196,10 +202,9 @@ class AgentLoop:
                                 prompt_systeme, message, stop=STOP_SEQUENCES
                             )
                             if DEBUG_BASCULE:
-                                print(f"[step {step}] {self.agent_loop.model_name} "
-                                      f"({self.agent_loop.api_url})")
-                                print(f"  prompt systeme : {prompt_systeme}")
-                                print(f"  reponse        : {result.text[:200]}")
+                                show_llm_debug(step, self.agent_loop.model_name,
+                                               self.agent_loop.api_url,
+                                               prompt_systeme, result.text)
                             relais_en_attente = None
                             current_context += result.text
                             request_conv_time = (time.monotonic() - request_start) * 1000
@@ -215,11 +220,8 @@ class AgentLoop:
                                 if key_index + 1 < len(keys):
                                     key_index += 1
                                     os.environ[key_var] = keys[key_index]
-                                    print(
-                                        f"429 rate limit -> token "
-                                        f"{key_index + 1}/{len(keys)} sur "
-                                        f"{self.agent_loop.model_name}"
-                                    )
+                                    show_key_rotation(key_index + 1, len(keys),
+                                                      self.agent_loop.model_name)
                                     continue
                                 key_index = 0
                                 if keys:
@@ -239,11 +241,7 @@ class AgentLoop:
                             elif groq_pool:
                                 next_model = random.choice(groq_pool)
                             else:
-                                raise AgentLoopError(
-                                    f"plus aucun modele disponible, "
-                                    f"{len(exhausted)} ecartes -> "
-                                    f"{', '.join(exhausted)}"
-                                )
+                                raise NoModelAvailableError(exhausted)
                             self.bascule_modele(next_model)
                             key_index = 0
                             key_var = self.agent_loop.llm.api_key_env
@@ -251,11 +249,8 @@ class AgentLoop:
                             if keys:
                                 os.environ[key_var] = keys[0]
                             relais_en_attente = RELAIS_MODELE
-                            print(
-                                f"{status} -> bascule sur "
-                                f"{self.agent_loop.model_name} "
-                                f"({self.agent_loop.api_url})"
-                            )
+                            show_bascule(status, self.agent_loop.model_name,
+                                         self.agent_loop.api_url)
 
                     total_input_tokens += result.input_tokens
                     total_output_token += result.output_tokens
@@ -321,7 +316,7 @@ class AgentLoop:
                     consecutive_errors = 0
                     self.check_budget(start, total_input_tokens, total_output_token)
                 except httpx.HTTPStatusError as e:
-                    print(f"HTTP Error: {e.response.status_code} {e.response.reason_phrase} {self.agent_loop.model_name}")
+                    show_error(f"HTTP Error: {e.response.status_code} {e.response.reason_phrase} {self.agent_loop.model_name}")
                     last_error = f"HTTPStatusError: {e.response.status_code}"
                     consecutive_errors += 1
                     self.check_budget(start, total_input_tokens, total_output_token)
@@ -336,7 +331,7 @@ class AgentLoop:
                 except Exception as e:
                     backup_json(total_input_tokens, total_output_token, total_request, current_context, self.agent_loop.model_name,
                                 task_id, message, steps)
-                    print(f"Error: {e}")
+                    show_error(f"Error: {e}")
                     last_error = f"{type(e).__name__}: {e}"
                     consecutive_errors += 1
 

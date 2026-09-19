@@ -6,6 +6,7 @@ from .Error import (
     MaxIterationsError,
     MaxOutputTokensError,
     MaxWallTimeError,
+    NoModelAvailableError,
     SigStopError,
 )
 from .contract_model import ExecutionResult, LLMProtocole, SandboxProtocol
@@ -29,6 +30,7 @@ __all__ = [
     "MaxIterationsError",
     "MaxOutputTokensError",
     "MaxWallTimeError",
+    "NoModelAvailableError",
     "SigStopError",
     "ExecutionResult",
     "LLMProtocole",

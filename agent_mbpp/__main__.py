@@ -26,6 +26,7 @@ from schemas import (
     SolutionOutput,
 )
 from src.agent_loop import AgentLoop
+from src.display_func import show_error, show_summary
 from src.sandbox import Sandbox
 
 MCP_SERVER = Path(__file__).resolve().parent.parent / "mcp_tools_mbpp.py"
@@ -101,20 +102,6 @@ def write_output(out: SolutionOutput, path: Path) -> None:
     path.write_text(out.model_dump_json(indent=2))
 
 
-def display(out: SolutionOutput) -> None:
-    """Meme sortie lisible que src/__main__.py, pour debugger a l'oeil."""
-    print("\n" + "=" * 60)
-    print(f"success    : {out.success}")
-    print(f"iterations : {out.iterations}   requests: {out.total_requests}")
-    print(
-        f"tokens     : {out.total_input_tokens}/{MAX_INPUT_TOKENS} in "
-        f"/ {out.total_output_tokens}/{MAX_OUTPUT_TOKENS} out"
-    )
-    print(f"temps      : {out.total_time_seconds:.1f}/{MAX_WALL_TIME_SECONDS} s")
-    if out.error:
-        print(f"error      : {out.error}")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="agent_mbpp")
     parser.add_argument("--task-file", type=Path, required=True)
@@ -128,7 +115,7 @@ def main() -> None:
     args = parse_args()
 
     if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GROQ_API_KEY")):
-        print("aucune cle API dans l'environnement : remplis .env", file=sys.stderr)
+        show_error("aucune cle API dans l'environnement : remplis .env")
         return
 
     task = load_task(args.task_file)
@@ -144,7 +131,6 @@ def main() -> None:
         )
     finally:
         conf.sandbox.close()
-    print(out.solution)
     if not out.solution:
         for step in reversed(out.steps):
             if step.sandbox_input:
@@ -152,11 +138,15 @@ def main() -> None:
                 break
 
     write_output(out, args.output)
-    display(out)
+    show_summary(out, {
+        "input": MAX_INPUT_TOKENS,
+        "output": MAX_OUTPUT_TOKENS,
+        "wall_time": MAX_WALL_TIME_SECONDS,
+    })
 
 
 if __name__ == "__main__":
     try:
         main()
     except (KeyboardInterrupt, SystemExit) as e:
-        print(f"error: {e}")
+        show_error(f"error: {e}")

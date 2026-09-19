@@ -7,9 +7,17 @@ class AgentLoopError(Exception):
 
 class SigStopError(AgentLoopError):
     """Levee quand la boucle est interrompue (Ctrl-C) apres sauvegarde du backup."""
-    # def __init__(self, message):
-    #     print(message)
 
+
+class NoModelAvailableError(AgentLoopError):
+    """Tous les modeles du pool ont ete ecartes (429 / 5xx)."""
+
+    def __init__(self, exhausted: list[str]) -> None:
+        self.exhausted = exhausted
+        super().__init__(
+            f"plus aucun modele disponible, {len(exhausted)} ecartes -> "
+            f"{', '.join(exhausted)}"
+        )
 
 class BudgetExceededError(AgentLoopError):
     """Base des depassements de budget (tokens, temps)."""
