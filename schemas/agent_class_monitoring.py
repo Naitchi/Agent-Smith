@@ -2,7 +2,14 @@ import random
 
 from .contract_model import LLMProtocole, SandboxProtocol
 from .step_metrics import StepMetrics
-from .tools_agent import AUTHORIZED_GEMINI, SYSTEM_PROMPT
+from .tools_agent import (
+    AUTHORIZED_GEMINI,
+    MBPP_MAX_INPUT_TOKENS,
+    MBPP_MAX_ITERATIONS,
+    MBPP_MAX_OUTPUT_TOKENS,
+    MBPP_MAX_WALL_TIME_SECONDS,
+    SYSTEM_PROMPT,
+)
 
 
 class AgentLoopConf:
@@ -18,10 +25,10 @@ class AgentLoopConf:
             llm: LLMProtocole | None = None,
             sandbox: SandboxProtocol | None = None,
             system_prompt: str = SYSTEM_PROMPT,
-            max_iterations=10,
-            max_input_tokens=6_000,
-            max_output_tokens=1_500,
-            max_wall_time_seconds=120,
+            max_iterations=MBPP_MAX_ITERATIONS,
+            max_input_tokens=MBPP_MAX_INPUT_TOKENS,
+            max_output_tokens=MBPP_MAX_OUTPUT_TOKENS,
+            max_wall_time_seconds=MBPP_MAX_WALL_TIME_SECONDS,
             models_name: list[str] = AUTHORIZED_GEMINI,
             api_url: str | None = None
             ):

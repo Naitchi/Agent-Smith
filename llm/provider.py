@@ -15,14 +15,11 @@ import httpx
 from dotenv import load_dotenv
 
 from schemas.llm_result import LLMResult
+from schemas.tools_agent import DEFAULT_TEMPERATURE, MAX_TOKENS_PAR_REQUETE
 
 load_dotenv()
 
-DEFAULT_MAX_TOKENS = 2048
-# 0 = on prend toujours le token le plus probable. Un agent qui rend du
-# code juge par des tests veut deux runs identiques sur la meme tache :
-# sinon un echec n'est pas rejouable et les modeles ne se comparent plus.
-DEFAULT_TEMPERATURE = 0.0
+DEFAULT_MAX_TOKENS = MAX_TOKENS_PAR_REQUETE
 
 
 class LLMProvider(ABC):
