@@ -24,7 +24,7 @@ Aujourd'hui `message` ne fait que grossir dans `src/agent_loop.py:261-288`, rien
 - [ ] Appeler la reconstruction **avant** `check_budget()` en tête d'itération : ça règle le
       reste ouvert de §mobenais.0 (« une requête unique peut franchir la limite à elle seule »)
       — aujourd'hui on ne peut que constater le dépassement, pas l'éviter
-- [ ] Revérifier sur les 3 tâches de mise au point (`collatz` / `lcs` / `puzzle`) que les tokens
+- [ ] Revérifier sur les 3 tâches de mise au point (`uno` / `dos` / `tres`) que les tokens
       d'entrée cumulés baissent bien, et de combien (chiffre à réutiliser dans le rapport)
 
 > Décidé ce soir : **pas de compaction par un second LLM sur MBPP.** La fenêtre glissante

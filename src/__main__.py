@@ -70,7 +70,7 @@ DEFAULT_TASK = uno
 def default_conf() -> AgentLoopConf:
     """Conf des taches de mise au point, PAS les limites du sujet.
 
-    Les defauts d'`AgentLoopConf` sont ceux de MBPP ; collatz/lcs/puzzle sont
+    Les defauts d'`AgentLoopConf` sont ceux de MBPP ; uno/dos/tres sont
     choisies pour les deborder, d'ou des limites explicitement plus larges.
     """
     return AgentLoopConf(
