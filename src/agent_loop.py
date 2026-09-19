@@ -91,6 +91,28 @@ def compact_manual(manual: str, max_chars: int = MAX_MANUAL_CHARS) -> str:
         garde.remove(max(garde, key=len))
     return " ".join(garde)
 
+
+def tronc_message(message: list[dict], last_iter: int = 3, max_obs_chars: int = 100) -> list[dict]:
+    """Vue allegee de l'historique, envoyee au LLM a la place de `message`.
+
+    L'enonce (message[0]) et les `last_iter` derniers tours (assistant +
+    observation) partent intacts ; les observations plus anciennes sont
+    coupees a `max_obs_chars` avec un marqueur. `message` n'est jamais
+    modifie : backup et reprise gardent l'historique complet.
+    """
+    tache, reste = message[0], message[1:]
+    nb_intacts = max(last_iter, 1) * 2
+    anciens, recents = reste[:-nb_intacts], reste[-nb_intacts:]
+
+    vue = [tache]
+    for m in anciens:
+        texte = m["content"]
+        if m["role"] == "user" and len(texte) > max_obs_chars:
+            coupe = len(texte) - max_obs_chars
+            m = {**m, "content": f"{texte[:max_obs_chars]}\n[... {coupe} chars truncated]"}
+        vue.append(m)
+    return vue + recents
+
 FORCE_429_MODELS = {
     m.strip() for m in os.environ.get("FORCE_429_MODELS", "").split(",") if m.strip()
 }
@@ -187,6 +209,7 @@ class AgentLoop:
         try:
             for step in range(len(steps) + 1, self.agent_loop.max_iterations + 1):
                 try:
+                    vue = tronc_message(message)
                     self.check_budget(start, total_input_tokens, total_output_token)
                     retries = 0
                     while True:
@@ -199,7 +222,7 @@ class AgentLoop:
                             if self.agent_loop.model_name in FORCE_429_MODELS:
                                 raise _fake_429(self.agent_loop.api_url)
                             result = self.agent_loop.llm(
-                                prompt_systeme, message, stop=STOP_SEQUENCES
+                                prompt_systeme, vue, stop=STOP_SEQUENCES
                             )
                             if DEBUG_BASCULE:
                                 show_llm_debug(step, self.agent_loop.model_name,
