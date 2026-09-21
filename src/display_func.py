@@ -51,8 +51,11 @@ def show_llm_debug(step: int, model: str, api_url: str, prompt: str, text: str) 
     _err(f"  reponse        : {text[:200]}")
 
 
-def show_key_rotation(index: int, total: int, model: str) -> None:
-    _err(f"429 rate limit -> token {index}/{total} sur {model}")
+def show_key_rotation(index: int, total: int, model: str, status: int) -> None:
+    if status == 429:
+        _err(f"429 rate limit -> token {index}/{total} sur {model}")
+    if status == 501:
+        _err(f"501 not implemented or not available -> token {index}/{total} sur {model}")
 
 
 def show_bascule(status: int, model: str, api_url: str) -> None:

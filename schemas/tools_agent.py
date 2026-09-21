@@ -23,7 +23,7 @@ STATUS_BASCULE = {404, 408, 429, 500, 502, 503, 504}
 MAX_MANUAL_CHARS = 700
 
 LAST_ITER_INTACTS = 10
-MAX_OBS_CHARS = 500
+MAX_OBS_CHARS = 100
 CHARS_PAR_TOKEN = 4
 MARGE_BUDGET = 0.9
 
@@ -31,10 +31,10 @@ BACKUP_DIR = PROJECT_ROOT / "backup_memory"
 BACKUP_FILE = BACKUP_DIR / "backup.json"
 
 
-# FORCE_429_MODELS = {
-#     m.strip() for m in os.environ.get("FORCE_429_MODELS", "").split(",") if m.strip()
-# }
-# DEBUG_BASCULE = os.environ.get("DEBUG_BASCULE", "") not in ("", "0")
+FORCE_429_MODELS = {
+    m.strip() for m in os.environ.get("FORCE_429_MODELS", "").split(",") if m.strip()
+}
+DEBUG_BASCULE = os.environ.get("DEBUG_BASCULE", "") not in ("", "0")
 
 
 SYSTEM_PROMPT = """You solve programming tasks by writing Python.
