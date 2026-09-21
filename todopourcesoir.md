@@ -14,18 +14,32 @@ Sans ça, les tokens d'entrée croissent quadratiquement (chaque tour repaie tou
 précédents) et le budget MBPP de 6k saute vers l'itération 6 sur 10.
 Aujourd'hui `message` ne fait que grossir dans `src/agent_loop.py:261-288`, rien n'est jamais retiré.
 
-- [ ] Extraire un vrai `_build_messages()` (aujourd'hui l'historique est construit inline
+- [x] Extraire un vrai `_build_messages()` (aujourd'hui l'historique est construit inline
       — c'est déjà le `[~]` de §mobenais.3) qui **reconstruit** la liste envoyée au lieu de
       passer `message` brut au provider
-- [ ] Fenêtre glissante : prompt système + énoncé de la tâche **jamais tronqués**, puis les
+      → `tronc_message()` (`src/agent_loop.py:100`) + `AgentLoop.vue_dans_budget()`
+      (`src/agent_loop.py:394`) : c'est `vue` qui part au provider, `message` garde
+      l'historique complet pour le backup et la reprise
+- [x] Fenêtre glissante : prompt système + énoncé de la tâche **jamais tronqués**, puis les
       N derniers tours (commencer à N=3)
-- [ ] Troncature des vieilles observations : couper à ~100 caractères avec un marqueur
+      → `LAST_ITER_INTACTS = 3` (`schemas/tools_agent.py:26`) ; `vue_dans_budget()` retombe
+      à 2 puis 1 tour intact si la requête ne rentre pas. Nuance : les vieux tours sont
+      **tronqués, pas retirés** — la fenêtre allège, elle ne supprime rien
+- [x] Troncature des vieilles observations : couper à ~100 caractères avec un marqueur
       explicite `[... 1240 chars truncated]` pour que le modèle sache qu'il y avait du contenu
-- [ ] Appeler la reconstruction **avant** `check_budget()` en tête d'itération : ça règle le
+      → `MAX_OBS_CHARS = 100`, marqueur posé dans `tronc_message()` (`src/agent_loop.py:118`)
+- [x] Appeler la reconstruction **avant** `check_budget()` en tête d'itération : ça règle le
       reste ouvert de §mobenais.0 (« une requête unique peut franchir la limite à elle seule »)
       — aujourd'hui on ne peut que constater le dépassement, pas l'éviter
+      → `src/agent_loop.py:214-215` ; `vue_dans_budget()` estime la requête
+      (`CHARS_PAR_TOKEN`, `MARGE_BUDGET = 0.9`) et lève `MaxInputTokensError` **avant**
+      l'envoi quand même un seul tour ne rentre pas
 - [ ] Revérifier sur les 3 tâches de mise au point (`uno` / `dos` / `tres`) que les tokens
       d'entrée cumulés baissent bien, et de combien (chiffre à réutiliser dans le rapport)
+      → pas lancé, aucun chiffre avant/après nulle part. **Et pas lançable en l'état :**
+      `src/agent_loop.py:30-42` importe `DEBUG_BASCULE` / `FORCE_429_MODELS`, que
+      `schemas/tools_agent.py:35-38` a commentés au dernier commit → `ImportError` sur
+      `import src.agent_loop`. À décommenter avant toute mesure
 
 > Décidé ce soir : **pas de compaction par un second LLM sur MBPP.** La fenêtre glissante
 > donne la même économie pour 0 token et 0 latence, alors qu'un appel de résumé coûte le
@@ -36,7 +50,10 @@ Aujourd'hui `message` ne fait que grossir dans `src/agent_loop.py:261-288`, rien
 Seul le format 1 marche, et partiellement.
 
 - [ ] `<end_code>` n'est pas géré par `extract_code` alors que le prompt l'écrit et que
-      `STOP_SEQUENCES` l'arme (`schemas/tools_agent.py:55`) — incohérence à corriger en premier
+      `STOP_SEQUENCES` l'arme (`schemas/tools_agent.py:80`) — incohérence à corriger en premier
+      → toujours ouvert. Pire que noté : la stop sequence coupe la réponse **sur** le
+      ``` fermant, donc `text.split("```")` ne rend que 2 parties et
+      `extract_code` (`schemas/tools_agent.py:138`) renvoie `None` sur une réponse correcte
 - [ ] Type `ExtractedCode` (aujourd'hui `str | None`) → sans lui, impossible de dire au LLM
       quel format a été reconnu
 - [ ] Format 2 — XML Anthropic `<invoke name="..."><parameter name="...">…</parameter></invoke>`
@@ -48,9 +65,31 @@ Seul le format 1 marche, et partiellement.
 
 ## 3. Boucle agent — reste divers (§mobenais.3)
 
-- [ ] Sur `max_iterations` atteint, `solution` reste `""` → renvoyer le dernier code candidat
+- [x] Sur `max_iterations` atteint, `solution` reste `""` → renvoyer le dernier code candidat
+      → repli sur le dernier `sandbox_input` non vide dans `agent_mbpp/__main__.py:135-139`.
+      Fait **côté CLI seulement** : `AgentLoop.run()` rend toujours `solution=""`, donc
+      `agent_swebench` (§4) devra le refaire ou le remonter dans la boucle
 - [ ] Le défaut d'`AgentLoopConf` est toujours un `Sandbox()` nu, donc `uv run -m src` tourne
       sans aucun outil (§mobenais.0 ; réglé pour `agent_mbpp` seulement)
+- [ ] **`max_wall_time_seconds` doit définir un timeout, pas seulement un constat.**
+      Aujourd'hui il n'est lu que par `check_budget()` (`src/agent_loop.py:428-433`), donc
+      *après* que la requête soit revenue. Le seul timeout réel est le `60.0` en dur de
+      `OpenAICompatibleProvider.__init__` (`llm/provider.py:88`), que `make_llm()` ne
+      surcharge même pas : il ne sait rien du budget de la tâche.
+      C'est le pendant exact du point §1.4 pour le temps — la boucle plafonne déjà la
+      sortie (`plafond_sortie()`) et l'entrée (`vue_dans_budget()`) sur le budget restant,
+      il manque le troisième :
+  - [ ] `delai_restant(start)` → `max_wall_time_seconds - (monotonic() - start)`, passé en
+        `timeout` de la requête (le provider relit `self.timeout` à chaque `complete()`,
+        comme il relit la clé : même point d'accroche)
+  - [ ] Vérifier le délai restant **dans la boucle de bascule** aussi : `while True`
+        (`src/agent_loop.py:217-279`) réessaie sans jamais regarder l'heure. Sur MBPP
+        (120 s) une cascade de 429 peut enchaîner 9 modèles × N clés × 60 s sans qu'aucun
+        `check_budget()` ne s'intercale — `MAX_CONSECUTIVE_ERRORS = 3` borne la boucle
+        externe, pas celle-là
+  - [ ] Garder une marge pour écrire `solution.json` : dépasser le wall-time n'est pas un
+        échec propre comme le dépassement de tokens (qui rend un `SolutionOutput` avec
+        `error`), c'est la moulinette qui tue le process — donc **aucune sortie du tout**
 
 ## 4. `agent_swebench` (§mobenais.6) — le gros morceau, rien n'existe
 
@@ -89,9 +128,12 @@ Seul le format 1 marche, et partiellement.
 - [ ] Couvrir les timeouts réseau (`httpx.RequestError`), non gérés
 - [ ] `LLMResult` : ajouter `retries`, `api_url`, `model_name` — la boucle les recompose à la main
 - [ ] Généraliser les pools `gemini_pool` / `groq_pool`, encore nommés en dur
-      (`src/agent_loop.py:161-162`)
-- [ ] Créer `.env.example` (**absent**) : documenter `GEMINI_API_KEYS` / `GROQ_API_KEYS`
+      (`src/agent_loop.py:191-192`)
+- [~] Créer `.env.example` (**absent**) : documenter `GEMINI_API_KEYS` / `GROQ_API_KEYS`
       (listes séparées par virgules) en plus des clés simples
+      → fichier créé (`GROQ_API_KEY` / `GEMINI_API_KEY` / `TESTBED_PATH`), mais les deux
+      variantes **au pluriel** manquent — or c'est la seule doc de la rotation de clés,
+      que `src/agent_loop.py:201-210` lit via `provider.keys_env`
 
 ## 6. Benchmark et rapport (§C.1) — pilote mobenais
 
@@ -125,10 +167,34 @@ Fichier `BENCHMARK_REPORT.md` **absent**.
 
 ## Notes avant de partir
 
-- Le sujet `en.subject.pdf` **n'est plus à la racine du repo** : le seul exemplaire retrouvé
-  est dans la corbeille (`~/.local/share/Trash/files/en.subject.pdf`). À restaurer avant de
-  reprendre, toutes les limites chiffrées viennent de là.
+- ~~Le sujet `en.subject.pdf` **n'est plus à la racine du repo** : le seul exemplaire retrouvé
+  est dans la corbeille (`~/.local/share/Trash/files/en.subject.pdf`).~~ **Plus dans la
+  corbeille non plus**, mais récupérable depuis git : il a été committé en `53b06f0` puis
+  supprimé en `92d15f7` — `git show 53b06f0:en.subject.pdf > en.subject.pdf` (2.3 Mo).
+  Attention, il est dans `.gitignore` : s'il revient, il ne repartira pas dans un commit.
 - À défaut, les limites sont vérifiables dans `moulinette/moulinette/models.py:96-106`
   (MBPP 10 / 6k / 1.5k / 120 s — SWE-bench 30 / 300k / 10k / 900 s).
 - Point à remonter à bclairot : `TESTBED_PATH` ne traverse pas la frontière `--mcp-stdio`
   (déjà noté dans `TODO.md` §0.5 et §bclairot.7) — bloquant pour le point 4.
+
+---
+
+## Point d'étape (relecture du 2026-09-21)
+
+Fait cette nuit : **le point 1 (troncature) à 4 items sur 5** — c'est le seul bloc entamé,
+mais c'était bien celui dont dépendait tout le reste. Le point 3 avance d'un item, le
+`.env.example` est à moitié fait.
+
+Rien sur les points 2, 4, 6, 8 : `agent_swebench/` n'existe pas, `BENCHMARK_REPORT.md`
+non plus, `extract_code` est inchangé.
+
+Ajouté au §3 après relecture : `max_wall_time_seconds` ne sert nulle part de timeout, il
+n'est que constaté a posteriori. Des trois limites du sujet, c'est la seule qui, dépassée,
+ne produit pas de `solution.json` — donc la plus coûteuse à laisser non bornée.
+
+**Bloquant immédiat, avant tout le reste :** `import src.agent_loop` lève un `ImportError`
+au dernier commit (`5d8d59f`). `src/agent_loop.py:30-42` importe `DEBUG_BASCULE` et
+`FORCE_429_MODELS`, que le même commit a commentés dans `schemas/tools_agent.py:35-38` en
+déplaçant les constantes. Ni `agent_mbpp` ni `uv run -m src` ne démarrent en l'état, donc
+la mesure avant/après du point 1.5 est à faire juste après ce correctif — c'est elle qui
+donne le chiffre du rapport.

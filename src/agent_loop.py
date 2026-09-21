@@ -239,7 +239,8 @@ class AgentLoop:
                             status = e.response.status_code
                             if status not in STATUS_BASCULE:
                                 raise
-                            retries += 1
+                            if status != 501:
+                                retries += 1
                             if status == 429:
                                 key_var = self.agent_loop.llm.api_key_env
                                 keys = provider_keys.get(key_var, [])
