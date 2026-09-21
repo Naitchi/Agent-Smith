@@ -35,7 +35,7 @@ from schemas.tools_agent import (BACKUP_DIR,
                                  LAST_ITER_INTACTS,
                                  MARGE_BUDGET,
                                  MAX_CONSECUTIVE_ERRORS,
-                                 MAX_MANUAL_CHARS,
+                                 MAX_LIMITES_CHARS,
                                  MAX_OBS_CHARS,
                                  MAX_TOKENS_PAR_REQUETE,
                                  STATUS_BASCULE,
@@ -87,14 +87,37 @@ def load_backup(task_id: str) -> dict | None:
 
 
 
-def compact_manual(manual: str, max_chars: int = MAX_MANUAL_CHARS) -> str:
-    if len(manual) <= max_chars:
-        return manual
-    phrases = [f"{p.strip()}." for p in manual.split(". ") if p.strip()]
-    garde = list(phrases)
-    while garde and len(" ".join(garde)) > max_chars:
-        garde.remove(max(garde, key=len))
-    return " ".join(garde)
+def compact_manual(manual: str, max_chars: int = MAX_LIMITES_CHARS) -> str:
+    """Manuel de la sandbox allege, signatures d'outils gardees INTACTES.
+
+    `get_manual()` rend `f"{limites}\n\n{outils}"` et la section limites ne
+    contient aucun retour a la ligne : le premier `\n` separe donc les deux
+    sans dependre de leur redaction. Coupe structurelle et non textuelle --
+    si `get_manual()` gagne un jour un `\n` en amont, on garde trop de
+    verbatim, on ne perd pas les outils.
+
+    Seules les limites sont rognees : le modele ne peut pas deviner le nom
+    d'un outil, alors qu'une limite non dite se rattrape a la premiere
+    observation. Elles sont coupees net, sans passer par un decoupage en
+    phrases : `get_manual()` concatene des f-strings dont les morceaux ne
+    tombent pas sur les fins de phrase, donc un `split(". ")` rend des
+    fragments, pas des phrases -- c'est ce qui faisait disparaitre tout le
+    bloc outils, vu comme une unique phrase de ~460 caracteres.
+
+    `final_answer` est en queue de section et saute donc en premier : sans
+    consequence, `SYSTEM_PROMPT` comme `SYSTEM_PROMPT_MBPP` le nomment deja.
+
+    Marqueur aligne sur `_truncate` (`mcp_tools_swebench.py:58`) : meme
+    convention des deux cotes de la frontiere MCP.
+    """
+    limites, _, outils = manual.partition("\n")
+    outils = outils.strip("\n")
+    if len(limites) > max_chars:
+        limites = (
+            limites[:max_chars]
+            + f"... (truncated, {len(limites)} chars total)"
+        )
+    return f"{limites}\n\n{outils}" if outils else limites
 
 
 def tronc_message(message: list[dict], last_iter: int = LAST_ITER_INTACTS,
