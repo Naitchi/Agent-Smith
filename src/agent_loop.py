@@ -239,16 +239,15 @@ class AgentLoop:
                             status = e.response.status_code
                             if status not in STATUS_BASCULE:
                                 raise
-                            if status != 501:
-                                retries += 1
-                            if status == 429:
+                            retries += 1
+                            if status == 429 or status == 501:
                                 key_var = self.agent_loop.llm.api_key_env
                                 keys = provider_keys.get(key_var, [])
                                 if key_index + 1 < len(keys):
                                     key_index += 1
                                     os.environ[key_var] = keys[key_index]
                                     show_key_rotation(key_index + 1, len(keys),
-                                                      self.agent_loop.model_name)
+                                                      self.agent_loop.model_name, status)
                                     continue
                                 key_index = 0
                                 if keys:
