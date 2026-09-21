@@ -1,9 +1,8 @@
 import os
 from pathlib import Path
 
-# ==========================================================================
 # Constantes globales du lot agent -- un seul endroit pour les regler.
-# ==========================================================================
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -23,8 +22,8 @@ MAX_CONSECUTIVE_ERRORS = 3
 STATUS_BASCULE = {404, 408, 429, 500, 502, 503, 504}
 MAX_MANUAL_CHARS = 700
 
-LAST_ITER_INTACTS = 3
-MAX_OBS_CHARS = 100
+LAST_ITER_INTACTS = 10
+MAX_OBS_CHARS = 500
 CHARS_PAR_TOKEN = 4
 MARGE_BUDGET = 0.9
 
