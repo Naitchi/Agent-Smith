@@ -71,6 +71,44 @@ Seul le format 1 marche, et partiellement.
       `agent_swebench` (§4) devra le refaire ou le remonter dans la boucle
 - [ ] Le défaut d'`AgentLoopConf` est toujours un `Sandbox()` nu, donc `uv run -m src` tourne
       sans aucun outil (§mobenais.0 ; réglé pour `agent_mbpp` seulement)
+- [ ] **`compact_manual()` supprime la liste des outils MCP — `agent_mbpp` n'utilise donc
+      jamais `run_tests` / `check_syntax`.** Vérifié sur les deux runs enregistrés
+      (`solution.json` tâche 92, `cache/mbpp_solution.json` tâche 304) : le `system_prompt`
+      sauvegardé ne contient ni `run_tests`, ni `check_syntax`, ni `MCP` — et aucun
+      `sandbox_input` ne les appelle. Le modèle réécrit ses `assert` à la main.
+      Cause : `compact_manual()` (`src/agent_loop.py:90`) coupe à `MAX_MANUAL_CHARS = 700`
+      en retirant la **plus longue** « phrase » (`split(". ")`). Or la section outils de
+      `get_manual()` est un bloc à newlines sans `". "` : elle forme une pseudo-phrase de
+      ~460 caractères, donc **la toute première supprimée**. Le manuel réel tombe de
+      ~1265 à 611 caractères et perd, dans l'ordre : les outils MCP, `list_resources` /
+      `get_resource`, puis `Authorized builtins`.
+      C'est la même règle qu'au §1 mais jamais appliquée ici : *ce qui ne doit jamais être
+      tronqué* doit être mis hors de portée du compacteur, pas confié à une heuristique —
+      qui plus est une heuristique « retire le plus long », donc le plus informatif.
+  - [x] Garder la section outils intacte et ne compacter que les limites. `get_manual()`
+        rend une seule chaîne plate (`src/sandbox/mcp_bridge.py:428`) : soit on la découpe
+        sur `"Available MCP tools"` côté boucle (à moi, un peu fragile), soit `get_manual()`
+        sépare les deux — **API de bclairot, donc à lui signaler, pas à corriger**
+        → fait côté boucle, sans toucher son fichier. Coupe **structurelle** :
+        `manual.partition("\n")`, car `base` ne contient aucun `\n` (vérifié) — pas de
+        recherche du texte `"Available MCP tools"`. Si `base` gagne un jour un `\n`, on
+        garde trop de verbatim, on ne perd pas les outils.
+        Les limites sont coupées **net** avec le marqueur de `_truncate`, sans découpage en
+        « phrases » : `split(". ")` rend des fragments sur ce texte, c'est l'erreur d'origine.
+        `MAX_MANUAL_CHARS = 700` → `MAX_LIMITES_CHARS = 250`, et le sens change : budget de
+        la **seule** section limites, outils hors budget.
+        Vérifié en conditions réelles (vrai serveur MCP, sans appel LLM) : `run_tests`,
+        `check_syntax`, `get_resource` et `Authorized imports` arrivent tous au modèle.
+  - [ ] Nommer `run_tests` explicitement dans `SYSTEM_PROMPT_MBPP` : il dit aujourd'hui
+        « run the given tests in the same block », ce qui pousse activement vers les
+        `assert` maison même quand le manuel passe — **pas encore fait**, le manuel est
+        réparé mais le prompt tire toujours dans l'autre sens
+  - [ ] Le serveur MCP `mbpp_methodology` de bclairot (`mcp_tools_mbpp.py:104`) documente
+        déjà le workflow en 6 étapes autour de `run_tests` — jamais récupéré, faute de
+        savoir que `get_prompt()` existe. Vérifier avec lui si c'est lui qu'il faut charger
+        plutôt que de dupliquer la méthodologie dans notre prompt
+  - [ ] Conséquence §6 : tant que ça tient, un run MBPP lance le serveur MCP en sous-processus
+        pour rien, et toute mesure « avec vs sans outils » mesurerait deux fois la même chose
 - [ ] **`max_wall_time_seconds` doit définir un timeout, pas seulement un constat.**
       Aujourd'hui il n'est lu que par `check_budget()` (`src/agent_loop.py:428-433`), donc
       *après* que la requête soit revenue. Le seul timeout réel est le `60.0` en dur de
@@ -107,8 +145,36 @@ Seul le format 1 marche, et partiellement.
 
 ### Compaction du contexte, côté SWE-bench uniquement
 
-- [ ] D'abord la troncature **mécanique** (contenus de fichiers, tracebacks, sorties de tests) :
+- [~] D'abord la troncature **mécanique** (contenus de fichiers, tracebacks, sorties de tests) :
       80 % du gain pour 0 token et 0 latence
+      → **le mécanisme existe déjà, côté bclairot** : `_truncate()`
+      (`mcp_tools_swebench.py:58`) coupe à `max_std_length` et pose un marqueur, et
+      `_format_result()` le branche sur 8 outils sur 9 — `read_file`, `run_tests`,
+      `search_code`, `find_references`, `get_patch`, `run_command`... donc contenus de
+      fichiers, tracebacks et sorties de tests sont couverts. C'est la même forme que le
+      `compact_manual` que je comptais écrire : rien à inventer, l'archi est déjà bonne.
+      Reste **deux réglages**, pas un mécanisme :
+  - [ ] `max_std_length = 10000` par défaut, soit ~2500 tokens par observation : si chaque
+        appel sature, 30 itérations font 75k des 300k. Le plafond existe, il est juste
+        large — c'est le chiffre à régler, et il se règle depuis `SWEBenchTools(...)`
+        côté `agent_swebench`, sans toucher son fichier
+  - [ ] Ça se **compose** avec le §1 : le serveur plafonne chaque observation à
+        `max_std_length`, la fenêtre glissante rabote ensuite les vieilles à
+        `MAX_OBS_CHARS`. Deux étages, deux rôles — garder cette séparation pour SWE-bench
+        plutôt que de réécrire quoi que ce soit dans la boucle
+  - [ ] **Du coup, la compaction LLM est encore moins probable qu'estimé** : les deux
+        étages mécaniques sont déjà là et gratuits. Ne l'ouvrir qu'avec un chiffre qui
+        montre que ça ne suffit pas
+- [ ] Deux points à signaler à bclairot sur `mcp_tools_swebench.py` (son fichier) :
+  - [ ] `edit_file` est le seul outil qui ne passe pas par `_format_result`, et c'est
+        aussi le seul dont le retour **réémet des chaînes fournies par le modèle** :
+        `f"Successfully replaced '{old_str}' with '{new_str}'"`. Un remplacement de 3000
+        caractères renvoie ~6000 caractères non tronqués. Même chose pour l'erreur
+        « found N times ». C'est le seul trou de la couche mécanique
+  - [ ] Marqueurs incohérents entre les deux côtés, et pas au même sens : `_truncate` écrit
+        `... (truncated, N chars total)` où N est la taille **totale**, `tronc_message`
+        écrit `[... N chars truncated]` où N est la taille **coupée**. Même mot, deux
+        grandeurs — à aligner avant que le modèle voie les deux dans un même contexte
 - [ ] Compaction par un second LLM seulement si ça ne suffit pas, et alors :
   - [ ] sur une **clé / un provider dédié**, jamais présent dans le pool de bascule de l'agent
         (sinon contention au pire moment) — les quotas free tier sont par clé sur fenêtre
@@ -192,9 +258,34 @@ Ajouté au §3 après relecture : `max_wall_time_seconds` ne sert nulle part de 
 n'est que constaté a posteriori. Des trois limites du sujet, c'est la seule qui, dépassée,
 ne produit pas de `solution.json` — donc la plus coûteuse à laisser non bornée.
 
-**Bloquant immédiat, avant tout le reste :** `import src.agent_loop` lève un `ImportError`
-au dernier commit (`5d8d59f`). `src/agent_loop.py:30-42` importe `DEBUG_BASCULE` et
-`FORCE_429_MODELS`, que le même commit a commentés dans `schemas/tools_agent.py:35-38` en
-déplaçant les constantes. Ni `agent_mbpp` ni `uv run -m src` ne démarrent en l'état, donc
-la mesure avant/après du point 1.5 est à faire juste après ce correctif — c'est elle qui
-donne le chiffre du rapport.
+Ajouté au §3 aussi, et c'est le plus gros : **`agent_mbpp` n'utilise pas les outils de
+bclairot.** Pas un choix, un effet de bord — `compact_manual()` supprime la section outils
+du manuel avant qu'elle n'atteigne le modèle. Le 3/3 revendiqué sur les tâches maison a
+donc été obtenu *sans* `run_tests`, ce qui change ce que ce chiffre vaut.
+
+~~**Bloquant immédiat :** `import src.agent_loop` lève un `ImportError`~~ — réglé,
+`DEBUG_BASCULE` et `FORCE_429_MODELS` sont décommentés, `import src.agent_loop` passe.
+
+### Coût du manuel réparé — chiffres mesurés, pas estimés
+
+Le `system_prompt` est **repayé à chaque requête**, c'est le terme dominant sur MBPP.
+Mesuré sur le run enregistré (`solution.json`, tâche 226) : `system_prompt` de 1607
+caractères, 1er appel à 500 tokens, 3 itérations pour 1826 tokens cumulés — soit ~110
+tokens de croissance par tour contre ~500 repayés à chaque fois.
+
+| budget limites | prompt | vs avant | ~tokens sur 10 iter | imports | outils |
+|---|---|---|---|---|---|
+| 700 (1er choix) | 2297 | +690 | **+2150** | oui | oui |
+| **250 (retenu)** | 1847 | +240 | **+748** | oui | oui |
+| avant le fix | 1607 | — | — | **non** | **non** |
+
+D'où 250 et pas 700 : à 700 le manuel mangeait un tiers du budget. À 250 on paie ~750
+tokens sur la tâche entière pour rendre `run_tests` atteignable — et on récupère au passage
+`Authorized imports`, que l'ancienne heuristique supprimait aussi.
+
+Ce qui saute à 250 : `Authorized builtins`, les attributs, les chemins. Assumé — la
+persistance et `final_answer` sont déjà nommés dans `SYSTEM_PROMPT_MBPP`, le reste se
+découvre à la première observation d'erreur.
+
+À confirmer sur un vrai run : le pari est que `run_tests` fait converger en moins
+d'itérations, et qu'une itération économisée (~500-800 tokens) rembourse largement les 750.

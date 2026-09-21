@@ -11,6 +11,7 @@ MBPP_MAX_INPUT_TOKENS = 6_000
 MBPP_MAX_OUTPUT_TOKENS = 1_500
 MBPP_MAX_WALL_TIME_SECONDS = 120
 MBPP_MCP_SERVER = PROJECT_ROOT / "mcp_tools_mbpp.py"
+SW_BENCH_TOOLS = PROJECT_ROOT / "mcp_tools_sw_bench.py"
 
 
 MAX_TOKENS_PAR_REQUETE = 2048
@@ -20,7 +21,15 @@ DEFAULT_TEMPERATURE = 0.0
 
 MAX_CONSECUTIVE_ERRORS = 3
 STATUS_BASCULE = {404, 408, 429, 500, 502, 503, 504}
-MAX_MANUAL_CHARS = 700
+# Budget de la seule section *limites* du manuel sandbox : les signatures
+# d'outils MCP partent toujours en entier, hors de ce budget.
+# 250 et pas 700 : le prompt systeme est repaye a CHAQUE requete, donc
+# 700 couterait ~2150 tokens sur 10 iterations, un tiers du budget MBPP.
+# Les 250 premiers caracteres portent les limites d'execution et le debut
+# de la liste d'imports ; le reste est soit deja dans SYSTEM_PROMPT_MBPP
+# (persistance, final_answer), soit decouvrable par l'observation d'erreur
+# (builtins, attributs).
+MAX_LIMITES_CHARS = 250
 
 LAST_ITER_INTACTS = 10
 MAX_OBS_CHARS = 100
