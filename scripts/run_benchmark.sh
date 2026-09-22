@@ -1,18 +1,4 @@
 #!/usr/bin/env bash
-# Benchmark SWE-bench : chaque modele x chaque tache, valide et range.
-#
-#   scripts/run_benchmark.sh
-#   MODELS="gemini-3.5-flash" TASKS="sympy__sympy-14711" scripts/run_benchmark.sh
-#   RUN_LABEL=ablation_x scripts/run_benchmark.sh      # meme taches, autre reglage
-#
-# Sortie : BENCHMARK/<label>/<modele>/<tache>/{solution.json, agent.log,
-# validation.log, verdict.txt}. Une case avec verdict.txt n'est pas relancee :
-# apres un mur de quota, on relance le script et il reprend ou il en etait.
-# Une case « INDISPO » (provider en panne ou quota epuise) n'a pas de
-# verdict.txt, elle est donc retentee au prochain lancement.
-#
-# NO_BASCULE=1 : un run = un modele, sinon la case mesure un autre modele.
-# La validation passe par scripts/validate_swebench.py (Docker rootless).
 set -uo pipefail
 unset VIRTUAL_ENV
 
@@ -44,8 +30,7 @@ for task in $TASKS; do
         echo "$model" > "$dir/model.txt"
         echo "> $model x $task"
 
-        # Meme plafond que la moulinette, tue le groupe au-dela.
-        (cd "$ROOT" && NO_BASCULE=1 timeout --kill-after=10 "$TIME_LIMIT" \
+        (cd "$ROOT" && NO_FALLBACK=1 timeout --kill-after=10 "$TIME_LIMIT" \
             uv run python -m agent_swebench --task-file "$task_file" \
             --output "$dir/solution.json" --model-name "$model") > "$dir/agent.log" 2>&1
 
@@ -64,7 +49,6 @@ for task in $TASKS; do
         echo "  -> $verdict"
         [ "$verdict" != "INDISPO" ] && echo "$verdict" > "$dir/verdict.txt"
 
-        # Conteneurs laisses par l'agent (cleanup du serveur MCP) et la validation.
         docker ps -aq --filter "ancestor=$image" | xargs -r docker rm -f > /dev/null
     done
 done

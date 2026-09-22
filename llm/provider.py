@@ -1,8 +1,4 @@
-"""Couche provider LLM : une abstraction, un transport.
-
-La boucle ne connait ni Gemini ni Groq : elle recoit un `LLMProvider` et
-l'appelle. Ce qui est propre a un fournisseur vient de `registry.py`.
-"""
+"""LLM provider interface and its OpenAI-compatible HTTP implementation."""
 
 from __future__ import annotations
 
@@ -16,45 +12,33 @@ from dotenv import load_dotenv
 
 from schemas.llm_result import LLMResult
 from schemas.tools.limits import (
-    CHARS_PAR_TOKEN,
+    CHARS_PER_TOKEN,
     DEFAULT_TEMPERATURE,
-    MAX_TOKENS_PAR_REQUETE,
-    TIMEOUT_REQUETE_SECONDS,
+    MAX_TOKENS_PER_REQUEST,
+    REQUEST_TIMEOUT_SECONDS,
 )
 
 load_dotenv()
 
-DEFAULT_MAX_TOKENS = MAX_TOKENS_PAR_REQUETE
+DEFAULT_MAX_TOKENS = MAX_TOKENS_PER_REQUEST
 
 
-def _generation_refusee(response: httpx.Response) -> str | None:
-    """Le texte d'un appel d'outil natif refuse par le provider, sinon None.
-
-    gpt-oss (Groq) est entraine a appeler ses propres outils (`container.exec`,
-    `repo_browser.search_code`...) en JSON. Avec `tool_choice: "none"`, Groq
-    repond 400 `tool_use_failed` mais renvoie la generation dans
-    `failed_generation`. On la rend sous forme `<tool_call>` : l'extraction la
-    convertit en appel Python, et la sandbox dit au modele si l'outil n'existe
-    pas -- au lieu de trois 400 d'affilee et d'un run mort.
-    """
+def rejected_generation(response: httpx.Response) -> str | None:
+    """Recover a native tool call Groq rejected, as a <tool_call> block."""
     if response.status_code != 400:
         return None
     try:
-        erreur = response.json().get("error", {})
+        error = response.json().get("error", {})
     except ValueError:
         return None
-    if erreur.get("code") != "tool_use_failed" or not erreur.get("failed_generation"):
+    if (error.get("code") != "tool_use_failed"
+            or not error.get("failed_generation")):
         return None
-    return f"<tool_call>{erreur['failed_generation']}</tool_call>"
+    return f"<tool_call>{error['failed_generation']}</tool_call>"
 
 
 class LLMProvider(ABC):
-    """Interface commune a tous les fournisseurs.
-
-    `api_url` est l'endpoint reellement appele, celui que `--provider-url`
-    surcharge. `api_key_env` dit a la boucle quelle serie de cles faire
-    tourner sur un 429 -- c'est lui qui fait foi, pas l'URL.
-    """
+    """Common interface for every LLM provider."""
 
     model: str
     api_url: str
@@ -69,7 +53,7 @@ class LLMProvider(ABC):
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
     ) -> LLMResult:
-        """Une completion : messages -> texte + usage."""
+        """Run one completion and return its text and token usage."""
 
     def __call__(
         self,
@@ -79,16 +63,7 @@ class LLMProvider(ABC):
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
     ) -> LLMResult:
-        """Forme attendue par `schemas.contract_model.LLMProtocole`.
-
-        Les trois reglages ont un defaut, donc l'appel a deux arguments du
-        protocole reste valide : un appelant qui n'en veut pas ne voit pas
-        la difference. L'ordre est celui de `complete()`.
-
-        `stop` n'a volontairement pas de defaut ici : sa valeur est dictee
-        par le format du prompt, pas par le fournisseur. Elle vient de
-        `schemas.tools.prompts.STOP_SEQUENCES`, en face du prompt qui l'ecrit.
-        """
+        """Call `complete`, matching the LLMProtocol signature."""
         return self.complete(
             system,
             messages,
@@ -99,11 +74,7 @@ class LLMProvider(ABC):
 
 
 class OpenAICompatibleProvider(LLMProvider):
-    """Tout fournisseur exposant `/chat/completions` facon OpenAI.
-
-    Gemini, Groq, et par construction OpenRouter ou Together : seuls l'URL,
-    la variable de cle et les extras de payload changent.
-    """
+    """Any provider exposing an OpenAI-style /chat/completions endpoint."""
 
     def __init__(
         self,
@@ -111,7 +82,7 @@ class OpenAICompatibleProvider(LLMProvider):
         api_url: str,
         api_key_env: str,
         extra_payload: dict[str, Any] | None = None,
-        timeout: float = TIMEOUT_REQUETE_SECONDS,
+        timeout: float = REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         self.model = model
         self.api_url = api_url
@@ -127,12 +98,7 @@ class OpenAICompatibleProvider(LLMProvider):
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
     ) -> LLMResult:
-        """Appelle l'endpoint et rend un `LLMResult`.
-
-        La cle est relue a chaque appel, jamais mise en cache : la rotation
-        sur 429 reecrit `os.environ`, et un provider qui l'aurait capturee a
-        la construction ne verrait pas le changement. Leve si elle est vide.
-        """
+        """Call the endpoint with the key currently set in os.environ."""
         key = os.environ.get(self.api_key_env, "").split(",")[0].strip()
         if not key:
             raise RuntimeError(
@@ -160,15 +126,13 @@ class OpenAICompatibleProvider(LLMProvider):
             timeout=self.timeout,
         )
         latency_ms = (time.monotonic() - start) * 1000
-        recupere = _generation_refusee(response)
-        if recupere is not None:
-            # Pas d'`usage` dans une erreur : tokens ESTIMES (chars / 4),
-            # pour ne pas declarer 0 sur une requete que le provider a lue.
+        recovered = rejected_generation(response)
+        if recovered is not None:
             chars = sum(len(m["content"]) for m in payload["messages"])
             return LLMResult(
-                text=recupere,
-                input_tokens=chars // CHARS_PAR_TOKEN,
-                output_tokens=len(recupere) // CHARS_PAR_TOKEN,
+                text=recovered,
+                input_tokens=chars // CHARS_PER_TOKEN,
+                output_tokens=len(recovered) // CHARS_PER_TOKEN,
                 latency_ms=latency_ms,
                 model_name=self.model,
                 api_url=self.api_url,

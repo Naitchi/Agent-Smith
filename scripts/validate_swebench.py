@@ -1,20 +1,7 @@
-"""Valide une solution SWE-bench avec la moulinette, sur un Docker rootless.
+"""Validate a SWE-bench solution with the moulinette on rootless Docker.
 
-    uv run --project moulinette python scripts/validate_swebench.py \
-        cache/swebench_task.json cache/swebench_solution.json [--skip-metrics]
-
-Meme verdict que `moulinette_eval validate swebench ...` : on appelle sa
-propre `validate()` (FAIL_TO_PASS / PASS_TO_PASS, statut FULL, puis limites).
-Seule difference : `copy_to_container` est remplace.
-
-Pourquoi : celui de swebench tarre le fichier avec l'UID/GID de l'hote
-(103940:4225 ici). En Docker rootless, la plage de subuid ne fait que 65536,
-donc `put_archive` echoue sur `lchown ... invalid argument` et le patch
-n'entre jamais dans le conteneur -- la validation echoue quel que soit le
-patch. Ici l'archive est ecrite en root:root, que le daemon sait mapper.
-
-Ne touche a aucun fichier de la moulinette : le remplacement est fait en
-memoire, dans ce process seulement.
+Usage: uv run --project moulinette python scripts/validate_swebench.py
+       TASK_FILE SOLUTION_FILE [--skip-metrics]
 """
 import argparse
 import io
@@ -26,16 +13,16 @@ from moulinette.swebench import interact
 
 
 def copy_to_container_rootless(container, src: Path, dst: Path) -> None:
-    """`copy_to_container` de swebench, mais avec une entree tar root:root."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tar:
+    """Copy a file into the container as a root:root tar entry."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as tar:
         info = tar.gettarinfo(str(src), arcname=dst.name)
         info.uid = info.gid = 0
         info.uname = info.gname = "root"
-        with open(src, "rb") as f:
-            tar.addfile(info, f)
+        with open(src, "rb") as file:
+            tar.addfile(info, file)
     container.exec_run(f"mkdir -p {dst.parent}")
-    container.put_archive(str(dst.parent), buf.getvalue())
+    container.put_archive(str(dst.parent), buffer.getvalue())
 
 
 def main() -> None:
@@ -47,7 +34,8 @@ def main() -> None:
 
     interact.copy_to_container = copy_to_container_rootless
     MoulinetteCLI().validate(
-        "swebench", args.task_file, args.solution_file, skip_metrics=args.skip_metrics
+        "swebench", args.task_file, args.solution_file,
+        skip_metrics=args.skip_metrics,
     )
 
 

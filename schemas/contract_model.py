@@ -1,4 +1,7 @@
+"""Interfaces between the agent loop, the LLM and the sandbox."""
+
 from typing import Protocol
+
 from pydantic import BaseModel
 
 from .llm_result import LLMResult
@@ -15,12 +18,18 @@ class ExecutionResult(BaseModel):
 
 
 class SandboxProtocol(Protocol):
-    def execute(self, code: str) -> ExecutionResult: ...
-    def get_manual(self) -> str: ...
-    def close(self) -> None: ...
+    def execute(self, code: str) -> ExecutionResult:
+        ...
+
+    def get_manual(self) -> str:
+        ...
+
+    def close(self) -> None:
+        ...
 
 
-class LLMProtocole(Protocol):
+class LLMProtocol(Protocol):
     model: str
 
-    def __call__(self, system: str, messages: list[dict]) -> LLMResult: ...
+    def __call__(self, system: str, messages: list[dict]) -> LLMResult:
+        ...

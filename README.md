@@ -91,17 +91,28 @@ uv run python ./scripts/test_mcp_swebench.py
 
 ### Run the agent loop
 
-A minimal demo entry point exists today:
+The two subject CLIs live in `agent/agent_mbpp` and `agent/agent_swebench`; the helpers they
+share (argument parsing, task loading, first prompt, configuration) are in `agent/__init__.py`.
 
 ```bash
-uv run -m src                    # runs a default task through AgentLoop + Gemini
-uv run -m src "your task here"
+uv run python -m agent_mbpp --task-file cache/mbpp_task.json --output solution.json \
+    --model-name qwen/qwen3.8-27b [--provider-url https://.../chat/completions]
+uv run python -m agent_swebench --task-file cache/swebench_task.json --output solution.json \
+    --model-name qwen/qwen3.8-27b
+make run_mbpp / make run_sw-bench           # same, with the files of cache/
 ```
 
-> **TODO (mobenais):** the subject-mandated CLIs (`agent_mbpp`/`agent_swebench`,
-> with `--task-file`/`--output`/`--model-name`/`--provider-url`, driven by the
-> moulinette's `dump`/`validate` flow) are not built yet — only the underlying
-> `AgentLoop` engine and this ad-hoc `src/__main__.py` demo exist so far.
+By default each CLI starts its own MCP server over stdio (`mcp_tools_mbpp.py` or
+`mcp_tools_swebench.py`, with `--task-file`). Another server can be used instead:
+
+```bash
+... --mcp-server http://localhost:8080/mcp     # streamable HTTP
+... --mcp-stdio "python my_server.py"          # stdio
+```
+
+API keys come only from the environment (`.env`): `GROQ_API_KEY`, `GEMINI_API_KEY`,
+`MISTRAL_API_KEY`, each accepting several comma-separated keys. `uv run -m src [edit|lcs|puzzle]`
+runs demo tasks with wider limits. `NO_FALLBACK=1` keeps a run on a single model (benchmark mode).
 
 ### Run the exam scripts
 
@@ -129,8 +140,12 @@ harness (not part of this repository) and invoked as:
 
 On the **execution side (bclairot)**, AI was used as a search engine for documentation and code examples. It also helped me to test a lot, understanding the requirements, the constraints and  to be sure nothing was forgotten for the mandatory tasks of the project. Also generated a first draft of the README.md file, which was then improved and completed by me.
 
-> **TODO (mobenais):** describe AI usage on the agent-loop / LLM-provider /
-> benchmark side (which tasks, which parts).
+On the **agent side (mobenais)**, an AI coding assistant (Claude Code) was used to review and
+refactor code (extraction without regex, shared CLI helpers, English naming, flake8), to check
+which free-tier models answer with real API calls, to write the benchmark scripts and simulations
+of provider failures, and to draft the benchmark report from the measured data. Every change was
+reviewed, and every result in the report comes from runs validated by the moulinette.
+<!-- mobenais: complete with your own use of AI before this session -->
 
 ## System Architecture
 
@@ -139,7 +154,7 @@ On the **execution side (bclairot)**, AI was used as a search engine for documen
    │                                                  │   │                                       │
    │  agent_mbpp / agent_swebench (CLI)               │   │   Sandbox                             │
    │             │                                    │   │    ├─ security (imports, FS,          │
-   │  AgentLoop ─┼─ LLM provider (Gemini / Groq)      │   │    │   network, timeout, RAM)         │
+   │  AgentLoop ─┼─ LLM provider (Groq/Gemini/Mistral)│   │    │   network, timeout, RAM)         │
    │             ├─ extract_code()                    │   │    ├─ final_answer()                  │
    │             └─ system prompt                     │   │    ├─ REPL `uv run sandbox`           │
    │                                                  │   │    ├─ get_manual()                    │
@@ -159,34 +174,40 @@ the LLM's system prompt) is generated dynamically from the connected server's
 
 ## Agent Loop
 
-`src/agent_loop.py`'s `AgentLoop.run(task_id, benchmark, user_prompt)` drives the
-Thought → Code → Observation loop:
+`AgentLoop.run(task_id, benchmark, user_prompt)` (`src/agent_loop.py`) drives the
+Thought -> Code -> Observation loop until `final_answer()` or a limit:
 
-1. Sends the conversation so far to the current LLM provider (`GeminiLLM` or
-   `GroqLLM`, `schemas/llmclass.py`).
-2. Extracts the last fenced ` ```python ` block from the response
-   (`extract_code`, `schemas/tools_agent.py`).
-3. Runs it through `sandbox.execute(code)` and appends the result as the next
-   `observation` message.
-4. Stops when `execute()` returns a `final_answer`, or when a limit is hit
-   (`check_budget`: input/output tokens, wall time; iteration count in the `for`
-   loop itself) — each stop condition raises a dedicated `AgentLoopError` subclass
-   that `run()` turns into a `SolutionOutput(success=False, error=...)` instead of
-   crashing.
-5. On a `429` from the provider, rotates through multiple API keys
-   (`GEMINI_API_KEYS`/`GROQ_API_KEYS`/`MISTRAL_API_KEYS`, comma-separated) before
-   falling back to the next untried model of `AUTHORIZED_LLM`, in list order; the
-   URL and key variable follow the model (`make_llm`).
-6. On `Ctrl+C` or an unexpected exception mid-loop, backs up token counters and the
-   running context to `backup_memory/backup.json` before propagating/recording the
-   error, so a crashed run's usage isn't silently lost.
+1. **Prompt.** The system prompt (`schemas/tools/prompts.py`, one for MBPP, one for SWE-bench)
+   is followed by the sandbox manual from `sandbox.get_manual()`, so the tool list always comes
+   from the connected MCP server, even an unknown one. `compact_manual` shortens only the limits
+   section and keeps every tool signature.
+2. **History within budget.** `fit_view` sends the task and the last turns intact and shortens
+   older observations (`truncate_history`), shrinking the window until the request fits the
+   remaining input budget (with a 10 % margin). The limit is checked *before* each request.
+3. **Call.** `make_llm(model)` (`llm/registry.py`) builds an `OpenAICompatibleProvider` whose URL
+   and key variable come from the model's provider (Groq, Google AI Studio, Mistral). Generation
+   stops on `<end_code>` / `</tool_call>` so the model cannot invent an observation.
+4. **Extraction.** `extract_code` (`schemas/tools/tools_agent.py`) accepts a Python block (the
+   primary format), Anthropic XML `<invoke>`, Hermes `<tool_call>` JSON, ReAct
+   `Action:/Action Input:`, an unclosed block or code after a bare `Code:`. Non-Python calls are
+   converted into Python calls, and every repaired answer comes with a note sent back to the model.
+5. **Execution.** The code runs in the sandbox; stdout, stderr, errors, timeouts and truncation
+   become the next `Observation`. When 2 iterations or 20 % of the input budget remain, the model
+   is told to submit (this note is sent to the model only, never written into `sandbox_output`).
+6. **Provider failures.** On 429 the next API key of the same provider is used (`TokenRotator`).
+   On 404/408/413/429/5xx or a network error with no key left, the loop switches to the next model
+   of `AUTHORIZED_LLM` (Groq, then Gemini, then Mistral, strongest first); the new model keeps the
+   whole history plus a handover note (`create_newcontext`). If every model failed, it waits 60 s
+   and tries a full round again before giving up. A 413 first shrinks the history.
+7. **Stop.** `final_answer`, or a limit (iterations, input/output tokens, wall time measured from
+   process start with a 10 s margin to write `solution.json`). Every stop condition is an
+   `AgentLoopError`, turned into `SolutionOutput(success=False, error=...)` instead of a crash.
+   If the agent did not submit, the CLI keeps the last code (MBPP) or the container's `get_patch()`
+   (SWE-bench).
 
-Every step is recorded as a `StepMetrics` (`llm_output`, `sandbox_input`,
-`sandbox_output`, token counts, timing, retries), and the whole run is returned as
-a `SolutionOutput` — this is the trace the evaluator inspects to confirm the agent
-solved the task through genuine tool use rather than a memorized answer.
-
-**TODO (mobenais): A remplir**
+Every step is recorded as a `StepMetrics` (`llm_output`, `sandbox_input`, `sandbox_output`,
+tokens, time, retries, model and URL used), and the run is returned as a `SolutionOutput`: this
+is the trace the evaluator inspects to check that the task was solved through real tool use.
 
 ## Sandbox Design
 
@@ -296,4 +317,19 @@ multi-GB real SWE-bench image.
 
 ## Benchmark Results and Analysis
 
-> **TODO (mobenais, ablation bclairot): A remplir**
+Full data, tables and analysis: [`BENCHMARK_REPORT.md`](BENCHMARK_REPORT.md); raw runs and
+their `solution.json` in `BENCHMARK/`.
+
+- **Grid:** 5 free-tier models (qwen3.8-27b and gpt-oss-120b on Groq; gemini-3.5-flash,
+  3.5-flash-lite and 3.6-flash on Google AI Studio) x 3 SWE-bench Verified tasks
+  (`sympy-14711`, `sympy-13480`, `pydata__xarray-4629`), one model per run, validated with the
+  moulinette.
+- **Best model:** `qwen/qwen3.8-27b`, 6 / 6 PASS across both benchmark versions, fast and quick to
+  find the right file; it is first in the fallback order.
+- **Main limit is quota, not reasoning:** most failed cells are "provider unavailable". Groq is
+  limited per minute (hundreds of 429 absorbed by key rotation and waits); Gemini keys of one
+  project share a daily quota that `gemini-3.5-flash` and `3.6-flash` always exhausted.
+- **Ablation (system prompt):** on 5 MBPP tasks, the explicit prompt (test before submitting,
+  fix only what the failing assertion shows, worked example) takes `codestral-2508` from 1/5 to
+  5/5; for qwen both reach 5/5 but the explicit prompt needs fewer iterations.
+- **Exam-style runs:** MBPP 5/5 on 5 random tasks run like the exam (`run-agent 120` + `validate`).
