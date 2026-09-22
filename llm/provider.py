@@ -15,11 +15,37 @@ import httpx
 from dotenv import load_dotenv
 
 from schemas.llm_result import LLMResult
-from schemas.tools_agent import DEFAULT_TEMPERATURE, MAX_TOKENS_PAR_REQUETE
+from schemas.tools.limits import (
+    CHARS_PAR_TOKEN,
+    DEFAULT_TEMPERATURE,
+    MAX_TOKENS_PAR_REQUETE,
+    TIMEOUT_REQUETE_SECONDS,
+)
 
 load_dotenv()
 
 DEFAULT_MAX_TOKENS = MAX_TOKENS_PAR_REQUETE
+
+
+def _generation_refusee(response: httpx.Response) -> str | None:
+    """Le texte d'un appel d'outil natif refuse par le provider, sinon None.
+
+    gpt-oss (Groq) est entraine a appeler ses propres outils (`container.exec`,
+    `repo_browser.search_code`...) en JSON. Avec `tool_choice: "none"`, Groq
+    repond 400 `tool_use_failed` mais renvoie la generation dans
+    `failed_generation`. On la rend sous forme `<tool_call>` : l'extraction la
+    convertit en appel Python, et la sandbox dit au modele si l'outil n'existe
+    pas -- au lieu de trois 400 d'affilee et d'un run mort.
+    """
+    if response.status_code != 400:
+        return None
+    try:
+        erreur = response.json().get("error", {})
+    except ValueError:
+        return None
+    if erreur.get("code") != "tool_use_failed" or not erreur.get("failed_generation"):
+        return None
+    return f"<tool_call>{erreur['failed_generation']}</tool_call>"
 
 
 class LLMProvider(ABC):
@@ -61,7 +87,7 @@ class LLMProvider(ABC):
 
         `stop` n'a volontairement pas de defaut ici : sa valeur est dictee
         par le format du prompt, pas par le fournisseur. Elle vient de
-        `schemas.tools_agent.STOP_SEQUENCES`, en face du prompt qui l'ecrit.
+        `schemas.tools.prompts.STOP_SEQUENCES`, en face du prompt qui l'ecrit.
         """
         return self.complete(
             system,
@@ -85,7 +111,7 @@ class OpenAICompatibleProvider(LLMProvider):
         api_url: str,
         api_key_env: str,
         extra_payload: dict[str, Any] | None = None,
-        timeout: float = 60.0,
+        timeout: float = TIMEOUT_REQUETE_SECONDS,
     ) -> None:
         self.model = model
         self.api_url = api_url
@@ -133,8 +159,21 @@ class OpenAICompatibleProvider(LLMProvider):
             json=payload,
             timeout=self.timeout,
         )
-        response.raise_for_status()
         latency_ms = (time.monotonic() - start) * 1000
+        recupere = _generation_refusee(response)
+        if recupere is not None:
+            # Pas d'`usage` dans une erreur : tokens ESTIMES (chars / 4),
+            # pour ne pas declarer 0 sur une requete que le provider a lue.
+            chars = sum(len(m["content"]) for m in payload["messages"])
+            return LLMResult(
+                text=recupere,
+                input_tokens=chars // CHARS_PAR_TOKEN,
+                output_tokens=len(recupere) // CHARS_PAR_TOKEN,
+                latency_ms=latency_ms,
+                model_name=self.model,
+                api_url=self.api_url,
+            )
+        response.raise_for_status()
         body = response.json()
         usage = body.get("usage", {})
         return LLMResult(
@@ -142,6 +181,8 @@ class OpenAICompatibleProvider(LLMProvider):
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
             latency_ms=latency_ms,
+            model_name=self.model,
+            api_url=self.api_url,
         )
 
     def __repr__(self) -> str:

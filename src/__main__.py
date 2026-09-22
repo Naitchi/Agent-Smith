@@ -6,17 +6,16 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 
-from llm import make_llm
+from llm import has_api_key, make_llm
 from schemas import AgentLoopConf
 
 from .agent_loop import AgentLoop
 from .display_func import show_error, show_steps, show_summary
 
 uno = """\
-tell me your model name.
+modify a file for me
 """
 
 dos = """\
@@ -83,8 +82,8 @@ def default_conf() -> AgentLoopConf:
 
 
 def main() -> None:
-    if not os.environ.get("GEMINI_API_KEY"):
-        show_error("GEMINI_API_KEY absent : `make install` puis remplis .env")
+    if not has_api_key():
+        show_error("aucune cle API dans l'environnement : remplis .env")
         return
 
     arg = sys.argv[1] if len(sys.argv) > 1 else None
@@ -109,7 +108,7 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (Exception, TimeoutError) as e:
+    except Exception as e:
         show_error(f"Erreur inattendue : {type(e).__name__}: {e}")
     finally:
         show_error("Fin du programme.")

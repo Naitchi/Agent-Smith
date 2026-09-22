@@ -1,0 +1,10 @@
+Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+Disconnected from MCP server.
+
+============================================================
+success    : False
+solution   : ''
+iterations : 23   requests: 24
+tokens     : 272014/300000 in / 4656/10000 out
+temps      : 210.7/900 s
+error      : max_input_tokens exceeded (277302/300000)

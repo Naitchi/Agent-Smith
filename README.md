@@ -174,8 +174,9 @@ Thought → Code → Observation loop:
    that `run()` turns into a `SolutionOutput(success=False, error=...)` instead of
    crashing.
 5. On a `429` from the provider, rotates through multiple API keys
-   (`GEMINI_API_KEYS`/`GROQ_API_KEYS`, comma-separated) before falling back to a
-   different model in the same provider's pool, then the other provider.
+   (`GEMINI_API_KEYS`/`GROQ_API_KEYS`/`MISTRAL_API_KEYS`, comma-separated) before
+   falling back to the next untried model of `AUTHORIZED_LLM`, in list order; the
+   URL and key variable follow the model (`make_llm`).
 6. On `Ctrl+C` or an unexpected exception mid-loop, backs up token counters and the
    running context to `backup_memory/backup.json` before propagating/recording the
    error, so a crashed run's usage isn't silently lost.

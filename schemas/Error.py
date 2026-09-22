@@ -19,6 +19,7 @@ class NoModelAvailableError(AgentLoopError):
             f"{', '.join(exhausted)}"
         )
 
+
 class BudgetExceededError(AgentLoopError):
     """Base des depassements de budget (tokens, temps)."""
 
