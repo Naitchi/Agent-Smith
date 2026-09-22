@@ -1,6 +1,4 @@
-# Textes envoyes au modele. Chaque caractere d'un prompt systeme est repaye
-# a CHAQUE requete : mesurer avant d'allonger (cf. todopourcesoir.md).
-
+"""Prompts and stop sequences sent to the model."""
 
 SYSTEM_PROMPT = """You solve programming tasks by writing Python.
 At each step, write a single Python code block inside a ```py fence.
@@ -11,18 +9,7 @@ Always write in English.
 """
 
 
-RELAIS_MODELE = (
-    "You are taking over an ongoing task from another model. "
-    "The conversation above is your own history: continue from it, "
-    "keep the same output format, and do not restart from scratch."
-)
-
-
-
 END_CODE = "<end_code>"
-# `</tool_call>` : un modele entraine au format Hermes s'arrete aussi apres
-# son appel au lieu d'inventer l'observation (sujet V.6) ; `extract_code`
-# tolere la balise fermante coupee.
 STOP_SEQUENCES = [END_CODE, "</tool_call>"]
 
 

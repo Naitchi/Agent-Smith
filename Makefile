@@ -19,10 +19,10 @@ solution:
 
 
 run_mbpp:
-	PYTHONPATH=Agent uv run python -m agent_mbpp --task-file $(TASK) --output $(OUT) $(if $(MODEL),--model-name $(MODEL))
+	PYTHONPATH=agent uv run python -m agent_mbpp --task-file $(TASK) --output $(OUT) $(if $(MODEL),--model-name $(MODEL))
 
 run_sw-bench:
-	PYTHONPATH=Agent uv run python -m agent_swebench --task-file $(SWE_TASK) --output $(OUT) $(if $(MODEL),--model-name $(MODEL))
+	PYTHONPATH=agent uv run python -m agent_swebench --task-file $(SWE_TASK) --output $(OUT) $(if $(MODEL),--model-name $(MODEL))
 
 
 bench:

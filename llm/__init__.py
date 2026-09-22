@@ -1,8 +1,4 @@
-"""Couche LLM (lot mobenais, cf. TODO 0.7) : providers et registre.
-
-`make_llm(model)` est le point d'entree : il rend un `LLMProvider` deja
-appaire avec l'endpoint et la variable de cle de son fournisseur.
-"""
+"""LLM layer: providers, registry and API key rotation."""
 
 from .provider import (
     DEFAULT_MAX_TOKENS,

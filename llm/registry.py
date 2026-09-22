@@ -1,9 +1,4 @@
-"""Ou vit la connaissance « quel modele appartient a quel fournisseur ».
-
-Un seul endroit decide de l'URL, de la variable de cle et des extras de
-payload. Ajouter OpenRouter ou Together = ajouter un `ProviderSpec`, sans
-toucher ni la boucle agent ni les CLI.
-"""
+"""Maps each model to its provider's URL, key variable and payload."""
 
 from __future__ import annotations
 
@@ -25,12 +20,7 @@ from .provider import OpenAICompatibleProvider
 
 @dataclass(frozen=True)
 class ProviderSpec:
-    """Tout ce qui distingue un fournisseur d'un autre.
-
-    `keys_env` porte la liste de cles pour la rotation sur 429, avec repli
-    sur `api_key_env`. `extra_payload` est par fournisseur et non global :
-    Groq exige `tool_choice: "none"`, Gemini le refuse sans `tools`.
-    """
+    """Everything that differs from one provider to another."""
 
     name: str
     api_url: str
@@ -67,11 +57,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
 
 
 def spec_for_model(model: str) -> ProviderSpec:
-    """Rend le `ProviderSpec` du modele, ou leve si personne ne le sert.
-
-    On refuse plutot que de deviner : sans fournisseur, on ne sait pas quelle
-    cle lire, et un appel avec la mauvaise cle echoue moins clairement.
-    """
+    """Return the provider serving `model`; raise ValueError if none does."""
     for provider in PROVIDERS:
         if model in provider.models:
             return provider
@@ -83,12 +69,10 @@ def spec_for_model(model: str) -> ProviderSpec:
 
 
 def has_api_key() -> bool:
-    """Vrai si au moins un fournisseur a une cle (liste ou cle simple).
-
-    Meme lecture que la boucle : `keys_env` d'abord, `api_key_env` sinon.
-    """
+    """Return True if at least one provider has an API key set."""
     return any(
-        os.environ.get(provider.keys_env) or os.environ.get(provider.api_key_env)
+        os.environ.get(provider.keys_env)
+        or os.environ.get(provider.api_key_env)
         for provider in PROVIDERS
     )
 
@@ -96,11 +80,7 @@ def has_api_key() -> bool:
 def make_llm(
     model: str, api_url: str | None = None
 ) -> OpenAICompatibleProvider:
-    """Seul point d'entree : modele, URL et variable de cle vont ensemble.
-
-    `api_url` (c'est `--provider-url`) remplace l'endpoint par defaut du
-    fournisseur ; la variable de cle reste celle du fournisseur du modele.
-    """
+    """Build the provider for `model`; `api_url` overrides its endpoint."""
     provider = spec_for_model(model)
     return OpenAICompatibleProvider(
         model=model,

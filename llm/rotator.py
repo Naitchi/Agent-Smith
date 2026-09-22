@@ -1,9 +1,4 @@
-"""Rotation des cles API, par fournisseur.
-
-La cle active est posee dans `os.environ[api_key_env]`, que le provider
-relit a chaque appel (`provider.complete`) : c'est le seul point de contact
-entre les deux, la boucle ne manipule plus l'environnement elle-meme.
-"""
+"""Per-provider API key rotation."""
 
 from __future__ import annotations
 
@@ -13,28 +8,27 @@ from .registry import PROVIDERS, ProviderSpec
 
 
 class TokenRotator:
-    """Cles de chaque fournisseur et laquelle est active.
+    """Holds each provider's keys and exposes the active one in os.environ."""
 
-    Lues une fois : `keys_env` (liste separee par des virgules) d'abord,
-    `api_key_env` (cle simple) sinon. Une variable vide compte comme absente.
-    """
-
-    def __init__(self, providers: tuple[ProviderSpec, ...] = PROVIDERS) -> None:
+    def __init__(
+            self, providers: tuple[ProviderSpec, ...] = PROVIDERS) -> None:
         self.keys: dict[str, list[str]] = {}
         self.index: dict[str, int] = {}
         for provider in providers:
-            raw = os.environ.get(provider.keys_env) or os.environ.get(provider.api_key_env, "")
-            self.keys[provider.api_key_env] = [k.strip() for k in raw.split(",") if k.strip()]
-            self.premiere_cle(provider.api_key_env)
+            raw = (os.environ.get(provider.keys_env)
+                   or os.environ.get(provider.api_key_env, ""))
+            self.keys[provider.api_key_env] = [
+                key.strip() for key in raw.split(",") if key.strip()]
+            self.reset_key(provider.api_key_env)
 
-    def premiere_cle(self, key_env: str) -> None:
-        """Revient a la 1re cle du fournisseur (apres une bascule, une attente)."""
+    def reset_key(self, key_env: str) -> None:
+        """Make the provider's first key active again."""
         self.index[key_env] = 0
         if self.keys.get(key_env):
             os.environ[key_env] = self.keys[key_env][0]
 
-    def cle_suivante(self, key_env: str) -> bool:
-        """Passe a la cle suivante ; False s'il n'y en a plus."""
+    def next_key(self, key_env: str) -> bool:
+        """Switch to the next key; return False when none is left."""
         keys = self.keys.get(key_env, [])
         index = self.index.get(key_env, 0)
         if index + 1 >= len(keys):
@@ -44,5 +38,6 @@ class TokenRotator:
         return True
 
     def position(self, key_env: str) -> tuple[int, int]:
-        """(numero de la cle active, nombre de cles), pour l'affichage."""
-        return self.index.get(key_env, 0) + 1, len(self.keys.get(key_env, []))
+        """Return (active key number, number of keys)."""
+        return (self.index.get(key_env, 0) + 1,
+                len(self.keys.get(key_env, [])))
