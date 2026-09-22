@@ -1,0 +1,9 @@
+Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+Disconnected from MCP server.
+
+============================================================
+success    : True
+solution   : '(no output)'
+iterations : 3   requests: 3
+tokens     : 3771/300000 in / 1036/10000 out
+temps      : 4.7/900 s
