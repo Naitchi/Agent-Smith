@@ -182,7 +182,13 @@ class SandboxProtocol(Protocol):
 - [x] `LLMResult` : `text`, `input_tokens`, `output_tokens`, `latency_ms`, `model_name`, `api_url`
       *(les `retries` sont comptés par étape dans `StepMetrics`)*
 - [x] `class LLMProvider(ABC)` + `OpenAICompatibleProvider` (`llm/provider.py`)
-- [x] Abstraction : ajouter un fournisseur = un `ProviderSpec` dans `llm/registry.py`
+- [x] Abstraction : ajouter un fournisseur = **une entrée dans `models.json`**, plus aucune
+      ligne de code (depuis le 2026-09-22). Les URLs et les listes de modèles vivaient en dur
+      dans `schemas/tools/tools_agent.py` ; elles sont maintenant dans `models.json` à la racine,
+      validé en Pydantic par `schemas/models_config.py`, qui en construit les `ProviderConfig`
+      (`GROQ_API_KEY`/`GROQ_API_KEYS` déduits du nom). Ça répond aussi au ch. VIII du sujet,
+      « Configuration files for sandbox **and models** » — il n'y avait que `sandbox_template.json`.
+      Vérifié : `AUTHORIZED_LLM` identique aux 16 modèles d'avant, mêmes URLs, même `extra_payload`
       *(Mistral ajouté ainsi le 2026-09-22, sans toucher à la boucle)*
 - [x] 3 fournisseurs gratuits vérifiés par appel réel : Groq (3 modèles), Gemini (9), Mistral (4)
 - [x] **Multi-tokens par provider** : `TokenRotator` (`llm/rotator.py`, `reset_key` / `next_key`),
@@ -241,10 +247,47 @@ class SandboxProtocol(Protocol):
 - [x] Chargement `SWEBenchTaskInput`, serveur MCP de bclairot lancé avec `TESTBED_PATH`
 - [x] `solution` = patch `get_patch()`, avec repli sur le diff du conteneur
 - [x] Limites **30 / 300k / 10k / 900 s** (`SWEBENCH_LIMITS`)
-- [ ] Objectif **2/3** : examen du 2026-09-22 en cours (pool d'examen, graine 7)
+- [x] Objectif **2/3** : **2/3** le 2026-09-22 (pool d'examen, graine 7) — xarray-4629 et
+      sympy-13480 PASS ; scikit-learn-13439 non lancé (session MCP > 10 s, cf. §mobenais.8)
 - [x] Tâches de mise au point validées : sympy-14711, sympy-13480, xarray-4629, django-15741
 
-## mobenais.7 Reste à faire / à signaler
+## mobenais.7 Audit de la boucle agent — 2026-09-22
+
+Huit points relevés en relecture, tous corrigés le jour même. Vérifiés par
+`check_fixes.py` (16 assertions, sans réseau) et par un run complet hors ligne
+sur la vraie sandbox + `mcp_tools_mbpp.py` avec un LLM scripté.
+
+- [x] 🔴 **`compact_manual` mutilait le manuel.** `MAX_LIMITS_CHARS = 250` coupait la ligne
+      des limites (1897 caractères avec la `SandboxConfig` par défaut) au milieu de la liste
+      des imports : `allowed_directories`, l'interdiction réseau et le contrat
+      `final_answer(value)` ne parvenaient jamais au modèle. Sur SWE-bench l'agent ignorait
+      donc quels répertoires il pouvait ouvrir. Corrigé par `shorten_lists()`
+      (`src/agent_loop.py`), qui ne raccourcit que les énumérations `[...]` — la partie
+      volumineuse — et laisse passer la prose qui suit. Générique : aucun nom de champ en dur,
+      donc un manuel d'un serveur MCP inconnu est traité pareil. 474 → 190 tokens, et cette
+      fois les 190 tokens sont les bons. Le cap global (900) ne sert plus que de filet.
+- [x] `print("[extraction: no note]")` de debug sur le chemin nominal (retiré).
+- [x] `--provider-url` sans `--model-name` était ignoré : `default_conf` ne construisait un
+      LLM que si `model_name` était fourni, et `AgentLoopConf` tirait alors un Gemini au hasard.
+- [x] `switch_model()` perdait le `--provider-url` dès la première bascule. L'override est
+      maintenant mémorisé (`AgentLoopConf.api_url_override`) et réappliqué **uniquement** à un
+      modèle du même provider — un autre provider a son propre endpoint.
+- [x] Modèle par défaut tiré parmi des modèles morts : `random.choice(AUTHORIZED_GEMINI)`
+      incluait `gemini-3-flash-preview` et `gemini-3.1-flash-lite`, tous deux notés
+      « model unavailable ». Remplacé par `default_model()` (`llm/registry.py`) : premier
+      modèle de `AUTHORIZED_LLM` dont le provider a une clé dans l'environnement.
+- [x] Les avertissements « last call » s'empilaient dans l'historique : la note était écrite
+      dans le message persisté, donc à l'étape 10 le modèle relisait le « 2 step(s) left » de
+      l'étape 8. Elle est maintenant ajoutée à la **vue** envoyée (`build_view()`), jamais à
+      `messages` — `sandbox_output` restait déjà propre.
+- [x] Les tokens consommés pendant les retries d'une étape échappaient à `check_budget()`
+      (appelé avec les totaux d'avant l'étape). `used_in + step_in` / `used_out + step_out`
+      partout dans la boucle de `ask_model`.
+- [x] `TokenRotator` écrasait la liste qu'il venait de lire : `reset_key` remplaçait
+      `*_API_KEY="a,b,c"` par `"a"`, donc un second rotator dans le même process n'aurait vu
+      qu'une clé. La liste complète est désormais recopiée dans `*_API_KEYS`, lu en premier.
+
+## mobenais.8 Reste à faire / à signaler
 
 - [ ] Relancer les 6 cases Gemini INDISPO de `BENCHMARK/v3` quand le quota quotidien revient
       (`RUN_LABEL=v3 scripts/run_benchmark.sh`)
@@ -321,10 +364,16 @@ Le champ `error` de `ExecutionResult` doit couvrir :
       model's response."` — pas dans `ExecutionResult.error` à proprement parler
       puisque `sandbox.execute()` n'est jamais appelé dans ce cas, mais l'agent
       reçoit bien un message explicite)
-- [ ] Bloc mal formé mais interprété quand même → **expliquer comment** (toujours
-      pas fait — `extract_code` ne signale jamais qu'il a pris un bloc sans tag
-      de langage reconnu ; fix esquissé mais pas appliqué, vu que c'est le fichier
-      de mobenais)
+- [x] Bloc mal formé mais interprété quand même → **expliquer comment** — fait le
+      2026-09-22 (mobenais, `schemas/tools/tools_agent.py`). Les six conversions
+      (bloc non fermé, ```` ```json ````, XML, Hermes, ReAct, `Code:` sans fence)
+      posaient déjà une `note`, préfixée à l'observation par `AgentLoop.execute()`.
+      Restaient trois réparations muettes, maintenant couvertes par `repair_notes()` :
+      fence sans tag de langage, ```` ``` ```` seule sur sa ligne dans une chaîne prise
+      pour une fermeture, et réponse à plusieurs blocs dont seul le dernier tourne.
+      Les notes se cumulent sur un même bloc. Vérifié : rejeu des **298** réponses LLM
+      enregistrées dans `BENCHMARK/` → **0 différence** sur le code extrait, 12 notes
+      nouvelles (toutes « plusieurs blocs »)
 - [x] Timeout atteint → indiquer que la sortie est partielle (`result.timed_out=True` +
       `error="Error: Execution timed out."`, stdout/stderr partiels tout de même capturés)
 - [x] Sortie d'outil tronquée → le dire explicitement (`ExecutionResult.truncated` bool,
@@ -462,19 +511,19 @@ détail des bugs trouvés en cours de route (grep `-e`, mauvais index de tuple,
 
 Pilote : **mobenais** (c'est lui qui a la couche multi-modèles). Ablation : **bclairot**.
 
-- [ ] **≥ 5 modèles** × **≥ 3 tâches SWE-bench** identiques
-- [ ] Setup : modèles, providers, tâches choisies **et pourquoi**
-- [ ] Table de résultats par couple modèle × tâche : Pass/Fail · itérations · tokens in · tokens out · wall-clock
-- [ ] Fiabilité provider : temps de réponse moyen, retries, disponibilité — *(données de mobenais)*
-- [ ] **≥ 2 métriques intermédiaires** parmi :
+- [x] **≥ 5 modèles** × **≥ 3 tâches SWE-bench** identiques *(v1 et v3 ; 6 cases Gemini à relancer quand le quota revient)*
+- [x] Setup : modèles, providers, tâches choisies **et pourquoi**
+- [x] Table de résultats par couple modèle × tâche : Pass/Fail · itérations · tokens in · tokens out · wall-clock
+- [x] Fiabilité provider : temps de réponse moyen, retries, disponibilité — *(données de mobenais)*
+- [x] **≥ 2 métriques intermédiaires** parmi : *(premier contact, première édition, discipline)*
   - [ ] Étape du premier accès au fichier qui figure dans le patch final *(métrique côté outils → bclairot)*
   - [ ] Étape où les échecs de tests diminuent pour la première fois *(bclairot)*
-  - [ ] Itérations entre « tests passent » et `final_answer` — idéal : 0 *(mobenais)*
-- [ ] **Ablation** : un avant/après sur un changement, même modèle, mêmes tâches
+  - [x] Itérations entre « tests passent » et `final_answer` — idéal : 0 *(mobenais)*
+- [x] **Ablation** : un avant/après sur un changement, même modèle, mêmes tâches *(prompt vague vs explicite, `BENCHMARK/ablation_prompt/`)*
   - suggestion mobenais : prompt vague vs prompt explicite
   - suggestion bclairot : avec vs sans `find_references`, ou troncature des sorties d'outils
-- [ ] Conclusions appuyées sur les données : modèles retenus / écartés
-- [ ] Les `solution.json` correspondants **committés dans le repo**
+- [x] Conclusions appuyées sur les données : modèles retenus / écartés
+- [~] Les `solution.json` correspondants **committés dans le repo** *(plus ignorés par `.gitignore` ; reste à commiter)*
 
 ## C.2 README.md
 
@@ -483,10 +532,10 @@ Pilote : **mobenais** (c'est lui qui a la couche multi-modèles). Ablation : **b
 - [ ] **Instructions** (install, config, exécution) — commun
 - [ ] **Resources** + description de l'usage de l'IA (quelles tâches, quelles parties) — commun
 - [ ] Architecture système — commun
-- [ ] Explication de la boucle agent — **mobenais**
+- [x] Explication de la boucle agent — **mobenais**
 - [ ] Design de la sandbox (dont le choix d'isolation) — **bclairot**
 - [ ] Détails d'implémentation des outils — **bclairot**
-- [ ] Résultats de benchmark et analyse — **mobenais**
+- [x] Résultats de benchmark et analyse — **mobenais**
 - [ ] **Rédigé en anglais**
 
 ## C.3 Sécurité IA & interdits (grade 0)

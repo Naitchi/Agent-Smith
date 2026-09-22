@@ -1,59 +1,19 @@
-"""Maps each model to its provider's URL, key variable and payload."""
+"""Maps each model to its provider's URL, key variable and payload.
+
+The providers themselves are not declared here: they are built from
+`models.json` by `schemas.models_config`.
+"""
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-from typing import Any
 
-from schemas.tools.tools_agent import (
-    AUTHORIZED_GEMINI,
-    AUTHORIZED_GROQ,
-    AUTHORIZED_MISTRAL,
-    GEMINI_API_URL,
-    GROQ_API_URL,
-    MISTRAL_API_URL,
-)
+from schemas.models_config import AUTHORIZED_LLM, PROVIDERS, ProviderConfig
 
 from .provider import OpenAICompatibleProvider
 
-
-@dataclass(frozen=True)
-class ProviderSpec:
-    """Everything that differs from one provider to another."""
-
-    name: str
-    api_url: str
-    api_key_env: str
-    keys_env: str
-    models: tuple[str, ...]
-    extra_payload: dict[str, Any] = field(default_factory=dict)
-
-
-PROVIDERS: tuple[ProviderSpec, ...] = (
-    ProviderSpec(
-        name="gemini",
-        api_url=GEMINI_API_URL,
-        api_key_env="GEMINI_API_KEY",
-        keys_env="GEMINI_API_KEYS",
-        models=tuple(AUTHORIZED_GEMINI),
-    ),
-    ProviderSpec(
-        name="groq",
-        api_url=GROQ_API_URL,
-        api_key_env="GROQ_API_KEY",
-        keys_env="GROQ_API_KEYS",
-        models=tuple(AUTHORIZED_GROQ),
-        extra_payload={"tool_choice": "none"},
-    ),
-    ProviderSpec(
-        name="mistral",
-        api_url=MISTRAL_API_URL,
-        api_key_env="MISTRAL_API_KEY",
-        keys_env="MISTRAL_API_KEYS",
-        models=tuple(AUTHORIZED_MISTRAL),
-    ),
-)
+# `ProviderSpec` is the historical name of a provider entry in this module.
+ProviderSpec = ProviderConfig
 
 
 def spec_for_model(model: str) -> ProviderSpec:
@@ -68,13 +28,28 @@ def spec_for_model(model: str) -> ProviderSpec:
     raise ValueError(f"modele inconnu : {model!r}. Connus : {known}")
 
 
+def has_key(provider: ProviderSpec) -> bool:
+    """Return True if `provider` has at least one API key in the env."""
+    return bool(os.environ.get(provider.keys_env)
+                or os.environ.get(provider.api_key_env))
+
+
 def has_api_key() -> bool:
     """Return True if at least one provider has an API key set."""
-    return any(
-        os.environ.get(provider.keys_env)
-        or os.environ.get(provider.api_key_env)
-        for provider in PROVIDERS
-    )
+    return any(has_key(provider) for provider in PROVIDERS)
+
+
+def default_model() -> str:
+    """First authorized model whose provider has a key in the env.
+
+    Used when no --model-name is given: picking the first model that can
+    actually answer beats drawing one at random, which may land on a model
+    the provider no longer serves.
+    """
+    for model in AUTHORIZED_LLM:
+        if has_key(spec_for_model(model)):
+            return model
+    return AUTHORIZED_LLM[0]
 
 
 def make_llm(

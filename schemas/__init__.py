@@ -14,13 +14,8 @@ from .Error import (
 from .contract_model import ExecutionResult, LLMProtocol, SandboxProtocol
 from .agent_class_monitoring import AgentLoopConf, OutputParameter
 from .extracted_code import ExtractedCode
+from .models_config import AUTHORIZED_LLM, PROVIDERS, ProviderConfig
 from .tools.tools_agent import (
-    AUTHORIZED_GEMINI,
-    AUTHORIZED_GROQ,
-    AUTHORIZED_LLM,
-    AUTHORIZED_MISTRAL,
-    GEMINI_API_URL,
-    GROQ_API_URL,
     create_newcontext,
     extract_code,
     to_python_call,
@@ -51,8 +46,6 @@ __all__ = [
     "ExecutionResult",
     "LLMProtocol",
     "LLMResult",
-    "GROQ_API_URL",
-    "GEMINI_API_URL",
     "SandboxProtocol",
     "MBPPTaskInput",
     "SandboxConfig",
@@ -64,10 +57,9 @@ __all__ = [
     "extract_code",
     "to_python_call",
     "ExtractedCode",
-    "AUTHORIZED_GEMINI",
-    "AUTHORIZED_GROQ",
     "AUTHORIZED_LLM",
-    "AUTHORIZED_MISTRAL",
+    "PROVIDERS",
+    "ProviderConfig",
     "create_newcontext",
     "SYSTEM_PROMPT_MBPP",
     "SYSTEM_PROMPT_SWEBENCH",

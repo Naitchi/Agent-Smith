@@ -1,6 +1,5 @@
 """Agent loop configuration and output parameters."""
 
-import random
 from dataclasses import dataclass
 
 from .contract_model import LLMProtocol, SandboxProtocol
@@ -12,7 +11,6 @@ from .tools.limits import (
     MBPP_MAX_WALL_TIME_SECONDS,
 )
 from .tools.prompts import SYSTEM_PROMPT
-from .tools.tools_agent import AUTHORIZED_GEMINI
 
 
 class AgentLoopConf:
@@ -27,17 +25,17 @@ class AgentLoopConf:
             max_input_tokens: int | None = MBPP_MAX_INPUT_TOKENS,
             max_output_tokens: int | None = MBPP_MAX_OUTPUT_TOKENS,
             max_wall_time_seconds: float | None = MBPP_MAX_WALL_TIME_SECONDS,
-            model_names: list[str] = AUTHORIZED_GEMINI,
             api_url: str | None = None,
+            api_url_override: str | None = None,
             deadline: float | None = None,
     ):
-        from llm import make_llm
+        from llm import default_model, make_llm
         from src.sandbox import Sandbox
 
-        self.llm = (llm if llm is not None
-                    else make_llm(random.choice(model_names)))
+        self.llm = llm if llm is not None else make_llm(default_model())
         self.model_name = self.llm.model
         self.api_url = api_url or getattr(self.llm, "api_url", "")
+        self.api_url_override = api_url_override
         self.sandbox = sandbox if sandbox is not None else Sandbox()
         self.system_prompt = system_prompt
         self.max_iterations = max_iterations

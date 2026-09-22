@@ -53,4 +53,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    run_cli(main)
+    try:
+        run_cli(main)
+    except Exception as e:
+        print(f"Erreur lors de l'exécution du script : {e}")
+    finally:
+        print("Exécution du script terminée.")
