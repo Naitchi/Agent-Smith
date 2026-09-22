@@ -1,0 +1,17 @@
+Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+HTTP Error: 400 Bad Request openai/gpt-oss-120b : {"error":{"message":"Tool choice is none, but model called a tool","type":"invalid_request_error","code":"tool_use_failed","failed_generation":"{\"name\": \"container.exec\", \"arguments\": {\"cmd\":[\"bash\",\"lc\",\"ls -R\"]}}"}}
+
+HTTP Error: 400 Bad Request openai/gpt-oss-120b : {"error":{"message":"Tool choice is none, but model called a tool","type":"invalid_request_error","code":"tool_use_failed","failed_generation":"{\"name\": \"container.exec\", \"arguments\": {\"cmd\":[\"bash\",\"-lc\",\"ls -R\"]}}"}}
+
+HTTP Error: 400 Bad Request openai/gpt-oss-120b : {"error":{"message":"Tool choice is none, but model called a tool","type":"invalid_request_error","code":"tool_use_failed","failed_generation":"{\"name\": \"container.exec\", \"arguments\": {\"cmd\":[\"bash\",\"lc\",\"ls -R\"]}}"}}
+
+Disconnected from MCP server.
+
+============================================================
+success    : False
+solution   : ''
+iterations : 0   requests: 3
+tokens     : 0/300000 in / 0/10000 out
+temps      : 1.5/900 s
+error      : 3 erreurs consecutives, derniere -> HTTPStatusError: 400 {"error":{"message":"Tool choice is none, but model called a tool","type":"invalid_request_error","code":"tool_use_failed","failed_generation":"{\"name\": \"container.exec\", \"arguments\": {\"cmd\":[\"bash\",\"lc\",\"ls -R\"]}}"}}
+

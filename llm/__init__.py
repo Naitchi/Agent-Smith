@@ -13,9 +13,11 @@ from .provider import (
 from .registry import (
     PROVIDERS,
     ProviderSpec,
+    has_api_key,
     make_llm,
     spec_for_model,
 )
+from .rotator import TokenRotator
 
 __all__ = [
     "DEFAULT_MAX_TOKENS",
@@ -24,6 +26,8 @@ __all__ = [
     "LLMProvider",
     "OpenAICompatibleProvider",
     "ProviderSpec",
+    "TokenRotator",
+    "has_api_key",
     "make_llm",
     "spec_for_model",
 ]

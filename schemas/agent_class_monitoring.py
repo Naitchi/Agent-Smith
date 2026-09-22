@@ -1,15 +1,16 @@
 import random
+from dataclasses import dataclass
 
 from .contract_model import LLMProtocole, SandboxProtocol
 from .step_metrics import StepMetrics
-from .tools_agent import (
-    AUTHORIZED_GEMINI,
+from .tools.limits import (
     MBPP_MAX_INPUT_TOKENS,
     MBPP_MAX_ITERATIONS,
     MBPP_MAX_OUTPUT_TOKENS,
     MBPP_MAX_WALL_TIME_SECONDS,
-    SYSTEM_PROMPT,
 )
+from .tools.prompts import SYSTEM_PROMPT
+from .tools.tools_agent import AUTHORIZED_GEMINI
 
 
 class AgentLoopConf:
@@ -25,12 +26,13 @@ class AgentLoopConf:
             llm: LLMProtocole | None = None,
             sandbox: SandboxProtocol | None = None,
             system_prompt: str = SYSTEM_PROMPT,
-            max_iterations=MBPP_MAX_ITERATIONS,
-            max_input_tokens=MBPP_MAX_INPUT_TOKENS,
-            max_output_tokens=MBPP_MAX_OUTPUT_TOKENS,
-            max_wall_time_seconds=MBPP_MAX_WALL_TIME_SECONDS,
+            max_iterations: int = MBPP_MAX_ITERATIONS,
+            max_input_tokens: int | None = MBPP_MAX_INPUT_TOKENS,
+            max_output_tokens: int | None = MBPP_MAX_OUTPUT_TOKENS,
+            max_wall_time_seconds: float | None = MBPP_MAX_WALL_TIME_SECONDS,
             models_name: list[str] = AUTHORIZED_GEMINI,
-            api_url: str | None = None
+            api_url: str | None = None,
+            deadline: float | None = None,
             ):
         from llm import make_llm
         from src.sandbox import Sandbox
@@ -44,30 +46,27 @@ class AgentLoopConf:
         self.max_input_tokens = max_input_tokens
         self.max_output_tokens = max_output_tokens
         self.max_wall_time_seconds = max_wall_time_seconds
+        # Instant `time.monotonic()` ou le PROCESS doit avoir rendu la main
+        # (la moulinette compte depuis son lancement, pas depuis `run()`).
+        self.deadline = deadline
 
 
+@dataclass
 class OutputParameter:
-    def __init__(
-            self,
-            task_id: str,
-            benchmark: str,
-            success: bool,
-            solution: str,
-            iterations: int,
-            total_requests: int,
-            total_input_tokens: int,
-            total_output_tokens: int,
-            start: float,
-            steps: list[StepMetrics],
-            message: str | None):
-        self.task_id = task_id
-        self.benchmark = benchmark
-        self.success = success
-        self.solution = solution
-        self.iterations = iterations
-        self.total_requests = total_requests
-        self.total_input_tokens = total_input_tokens
-        self.total_output_tokens = total_output_tokens
-        self.start = start
-        self.steps = steps
-        self.message = message
+    """Ce que `AgentLoop._output()` met en forme en `SolutionOutput`.
+
+    `start` est l'instant `time.monotonic()` du debut de la boucle : la duree
+    totale est calculee au moment de la sortie. `message` devient `error`.
+    """
+
+    task_id: str
+    benchmark: str
+    success: bool
+    solution: str
+    iterations: int
+    total_requests: int
+    total_input_tokens: int
+    total_output_tokens: int
+    start: float
+    steps: list[StepMetrics]
+    message: str | None

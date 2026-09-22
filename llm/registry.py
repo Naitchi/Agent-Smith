@@ -7,14 +7,17 @@ toucher ni la boucle agent ni les CLI.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from schemas.tools_agent import (
+from schemas.tools.tools_agent import (
     AUTHORIZED_GEMINI,
     AUTHORIZED_GROQ,
+    AUTHORIZED_MISTRAL,
     GEMINI_API_URL,
     GROQ_API_URL,
+    MISTRAL_API_URL,
 )
 
 from .provider import OpenAICompatibleProvider
@@ -53,6 +56,13 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         models=tuple(AUTHORIZED_GROQ),
         extra_payload={"tool_choice": "none"},
     ),
+    ProviderSpec(
+        name="mistral",
+        api_url=MISTRAL_API_URL,
+        api_key_env="MISTRAL_API_KEY",
+        keys_env="MISTRAL_API_KEYS",
+        models=tuple(AUTHORIZED_MISTRAL),
+    ),
 )
 
 
@@ -70,6 +80,17 @@ def spec_for_model(model: str) -> ProviderSpec:
         for provider in PROVIDERS
     )
     raise ValueError(f"modele inconnu : {model!r}. Connus : {known}")
+
+
+def has_api_key() -> bool:
+    """Vrai si au moins un fournisseur a une cle (liste ou cle simple).
+
+    Meme lecture que la boucle : `keys_env` d'abord, `api_key_env` sinon.
+    """
+    return any(
+        os.environ.get(provider.keys_env) or os.environ.get(provider.api_key_env)
+        for provider in PROVIDERS
+    )
 
 
 def make_llm(

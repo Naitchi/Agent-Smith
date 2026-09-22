@@ -1,54 +1,68 @@
-from  __future__ import annotations
-import time, json, os, shutil, random
+from __future__ import annotations
+
+import json
+import re
+import time
+
 import httpx
-from llm import PROVIDERS, make_llm
-from schemas import (AUTHORIZED_GEMINI,
-                     AUTHORIZED_GROQ,
-                     AgentLoopConf,
-                     AgentLoopError,
-                     ConsecutiveErrorsError,
-                     MaxInputTokensError,
-                     MaxIterationsError,
-                     MaxOutputTokensError,
-                     MaxWallTimeError,
-                     NoModelAvailableError,
-                     OutputParameter,
-                     RELAIS_MODELE,
-                     SigStopError,
-                     STOP_SEQUENCES,
-                     SolutionOutput,
-                     StepMetrics,
-                     extract_code
-                     )
-from .display_func import (show_bascule,
-                           show_error,
-                           show_key_rotation,
-                           show_llm_debug,
-                           )
 
+from llm import TokenRotator, make_llm
+from schemas import (
+    RELAIS_MODELE,
+    STOP_SEQUENCES,
+    AgentLoopConf,
+    AgentLoopError,
+    ConsecutiveErrorsError,
+    ExecutionResult,
+    MaxInputTokensError,
+    MaxIterationsError,
+    MaxOutputTokensError,
+    MaxWallTimeError,
+    NoModelAvailableError,
+    OutputParameter,
+    SigStopError,
+    SolutionOutput,
+    StepMetrics,
+    extract_code,
+)
+from schemas.tools.limits import (
+    ATTENTE_SECONDS,
+    BACKUP_DIR,
+    BACKUP_FILE,
+    CHARS_PAR_TOKEN,
+    LAST_ITER_INTACTS,
+    MARGE_BUDGET,
+    MARGE_SORTIE_SECONDS,
+    MAX_ATTENTES,
+    MAX_CONSECUTIVE_ERRORS,
+    MAX_LIMITES_CHARS,
+    MAX_OBS_CHARS,
+    MAX_REPONSES_VIDES,
+    MAX_TOKENS_PAR_REQUETE,
+    PAUSE_AVANT_ABANDON_SECONDS,
+    STATUS_BASCULE,
+    TIMEOUT_REQUETE_SECONDS,
+)
+from schemas.tools.tools_agent import (
+    AUTHORIZED_LLM,
+    DEBUG_BASCULE,
+    FORCE_429_MODELS,
+    NO_BASCULE,
+)
 
-from schemas.tools_agent import (BACKUP_DIR,
-                                 BACKUP_FILE,
-                                 CHARS_PAR_TOKEN,
-                                 DEBUG_BASCULE,
-                                 FORCE_429_MODELS,
-                                 LAST_ITER_INTACTS,
-                                 MARGE_BUDGET,
-                                 MAX_CONSECUTIVE_ERRORS,
-                                 MAX_LIMITES_CHARS,
-                                 MAX_OBS_CHARS,
-                                 MAX_TOKENS_PAR_REQUETE,
-                                 STATUS_BASCULE,
-                                 )
+from .display_func import (
+    show_attente,
+    show_bascule,
+    show_error,
+    show_key_rotation,
+    show_llm_debug,
+    show_pause,
+)
 
 
 def backup_json(total_input_tokens: int, total_output_token: int, total_request: int, current_context: str, model_name: str,
                 task_id: str, messages: list[dict], steps: list[StepMetrics]):
-    try:
-        os.mkdir(BACKUP_DIR)
-    except FileExistsError:
-        shutil.rmtree(BACKUP_DIR)
-        os.mkdir(BACKUP_DIR)
+    BACKUP_DIR.mkdir(exist_ok=True)
     with open(BACKUP_FILE, "w") as f:
         json.dump(
             {
@@ -143,6 +157,27 @@ def tronc_message(message: list[dict], last_iter: int = LAST_ITER_INTACTS,
     return vue + recents
 
 
+def observation(exec_res: ExecutionResult) -> str:
+    """Tout ce que la sandbox a rendu, mis en texte pour le LLM.
+
+    Rien n'est jete : sur une erreur ou un timeout, la sandbox rend aussi ce
+    qui a ete imprime avant, et c'est souvent ce qui explique l'erreur.
+    Timeout et troncature sont dits en clair (sujet : le LLM ne doit jamais
+    deviner ce qui s'est passe).
+    """
+    parts = []
+    if exec_res.stdout:
+        parts.append(exec_res.stdout.rstrip("\n"))
+    if exec_res.stderr:
+        parts.append(f"stderr:\n{exec_res.stderr.rstrip()}")
+    if exec_res.error:
+        parts.append(f"error: {exec_res.error}")
+    if exec_res.timed_out:
+        parts.append("[timeout: execution was stopped, the output above is partial]")
+    if exec_res.truncated:
+        parts.append("[output truncated: print less, e.g. a slice or a summary]")
+    return "\n".join(parts) or "(no output: use print() to see values)"
+
 
 def _fake_429(api_url: str) -> httpx.HTTPStatusError:
     """Un 429 identique en forme a celui d'un provider, sans appel reseau."""
@@ -157,21 +192,64 @@ def _fake_429(api_url: str) -> httpx.HTTPStatusError:
 class AgentLoop:
     def __init__(
         self,
-        agent_loop_conf: AgentLoopConf | None
+        agent_loop_conf: AgentLoopConf
         ) -> None:
         self.agent_loop = agent_loop_conf
+        # Taille max d'UNE requete (tokens estimes), apprise d'un 413.
+        self._plafond_requete: int | None = None
 
     def bascule_modele(self, model: str) -> None:
         """Change de modele : llm, model_name et api_url changent ensemble."""
+        self._plafond_requete = None  # la limite apprise etait celle de l'ancien
         self.agent_loop.llm = make_llm(model)
         self.agent_loop.model_name = model
         self.agent_loop.api_url = self.agent_loop.llm.api_url
 
+    def delai_restant(self) -> float:
+        """Secondes avant l'echeance, marge d'ecriture de `solution.json` deduite."""
+        return self._fin - time.monotonic()
+
+    def gerer_indispo(self, status: int | str) -> None:
+        """Le modele n'a pas repondu (429, 5xx, reseau).
+
+        429 : cle suivante du meme fournisseur. Sinon, ou s'il n'y a plus de
+        cle : modele suivant de AUTHORIZED_LLM (NO_BASCULE : pause puis meme
+        modele, MAX_ATTENTES fois). Plus aucun modele : une pause puis un
+        nouveau tour complet ; si ce tour echoue aussi, abandon.
+        """
+        model = self.agent_loop.model_name
+        key_env = self.agent_loop.llm.api_key_env
+
+        if status == 429 and self._rotator.cle_suivante(key_env):
+            show_key_rotation(*self._rotator.position(key_env), model, status)
+            return
+
+        if NO_BASCULE and self._attentes < MAX_ATTENTES:
+            self._attentes += 1
+            show_attente(status, ATTENTE_SECONDS, model)
+            time.sleep(min(ATTENTE_SECONDS, max(self.delai_restant(), 0)))
+            self._rotator.premiere_cle(key_env)
+            return
+
+        self._exhausted.append(f"{model} ({status})")
+        if (not self._pool and not NO_BASCULE and not self._pause_faite
+                and self.delai_restant() > PAUSE_AVANT_ABANDON_SECONDS):
+            self._pause_faite = True
+            show_pause(PAUSE_AVANT_ABANDON_SECONDS)
+            time.sleep(PAUSE_AVANT_ABANDON_SECONDS)
+            self._pool = list(AUTHORIZED_LLM)
+        if not self._pool:
+            raise NoModelAvailableError(self._exhausted)
+        self.bascule_modele(self._pool.pop(0))
+        self._rotator.premiere_cle(self.agent_loop.llm.api_key_env)
+        self._relais = RELAIS_MODELE
+        show_bascule(status, self.agent_loop.model_name, self.agent_loop.api_url)
+
     def run(
-            self, 
-            task_id: str, 
-            benchmark: str, 
-            user_prompt:str,
+            self,
+            task_id: str,
+            benchmark: str,
+            user_prompt: str,
             resume: bool = True,
             ) -> SolutionOutput:
         """Deroule la boucle Thought/Code/Observation jusqu'a final_answer().
@@ -181,6 +259,13 @@ class AgentLoop:
         sur le `--model-name` demande.
         """
         start = time.monotonic()
+        fin = float("inf")
+        if self.agent_loop.max_wall_time_seconds is not None:
+            fin = start + self.agent_loop.max_wall_time_seconds
+        if self.agent_loop.deadline is not None:
+            fin = min(fin, self.agent_loop.deadline)
+        self._fin = fin - MARGE_SORTIE_SECONDS
+
         message: list[dict] = [
             {
                 "role": "user",
@@ -198,7 +283,7 @@ class AgentLoop:
         consecutive_errors = 0
 
         current_context = ""
-        relais_en_attente: str | None = None
+        self._relais: str | None = None
         total_input_tokens = total_output_token = total_request = 0
         prec_model: str | None = None
         backup = load_backup(task_id) if resume else None
@@ -210,135 +295,126 @@ class AgentLoop:
             if backup["messages"]:
                 message, steps = backup["messages"], backup["steps"]
                 current_context = backup.get("current_context", "")
-                relais_en_attente = RELAIS_MODELE
-        gemini_pool = list(AUTHORIZED_GEMINI)
-        groq_pool = list(AUTHORIZED_GROQ)
-        exhausted: list[str] = []
+                self._relais = RELAIS_MODELE
+
+        self._exhausted: list[str] = []
+        self._pause_faite = False  # remis a False des qu'un modele repond
+        self._rotator = TokenRotator()
         if prec_model:
             self.bascule_modele(prec_model)
-        if self.agent_loop.model_name in gemini_pool:
-            gemini_pool.remove(self.agent_loop.model_name)
-        elif self.agent_loop.model_name in groq_pool:
-            groq_pool.remove(self.agent_loop.model_name)
+        # Modeles de rechange, dans l'ordre de AUTHORIZED_LLM ; la cle et l'URL
+        # suivent le modele (make_llm). NO_BASCULE (benchmark) : aucun.
+        self._pool = [] if NO_BASCULE else [
+            m for m in AUTHORIZED_LLM if m != self.agent_loop.model_name]
 
-        provider_keys: dict[str, list[str]] = {}
-        for provider in PROVIDERS:
-            raw = os.environ.get(
-                provider.keys_env, os.environ.get(provider.api_key_env, "")
-            )
-            keys = [k.strip() for k in raw.split(",") if k.strip()]
-            provider_keys[provider.api_key_env] = keys
-            if keys:
-                os.environ[provider.api_key_env] = keys[0]
-        key_index = 0
         try:
             for step in range(len(steps) + 1, self.agent_loop.max_iterations + 1):
                 try:
                     vue = self.vue_dans_budget(message, self._prompt_systeme, total_input_tokens)
                     self.check_budget(start, total_input_tokens, total_output_token)
-                    retries = 0
+                    retries = vides = self._attentes = 0
+                    step_in = step_out = 0
                     while True:
+                        # Chaque tentative (rotation, bascule) repasse
+                        # par le budget : l'echeance est verifiee ici aussi.
+                        self.check_budget(start, total_input_tokens, total_output_token)
                         try:
                             request_start = time.monotonic()
                             total_request += 1
                             prompt_systeme = self._prompt_systeme
-                            if relais_en_attente:
-                                prompt_systeme += "\n\n" + relais_en_attente
+                            if self._relais:
+                                prompt_systeme += "\n\n" + self._relais
                             if self.agent_loop.model_name in FORCE_429_MODELS:
                                 raise _fake_429(self.agent_loop.api_url)
+                            # La requete ne peut pas durer plus que le temps
+                            # qu'il reste : le timeout suit l'echeance.
+                            if hasattr(self.agent_loop.llm, "timeout"):
+                                self.agent_loop.llm.timeout = min(
+                                    TIMEOUT_REQUETE_SECONDS, self.delai_restant())
                             result = self.agent_loop.llm(
                                 prompt_systeme, vue, stop=STOP_SEQUENCES,
-                                max_tokens=self.plafond_sortie(total_output_token),
+                                max_tokens=self.plafond_sortie(total_output_token + step_out),
                             )
+                            request_conv_time = (time.monotonic() - request_start) * 1000
+                            step_in += result.input_tokens
+                            step_out += result.output_tokens
                             if DEBUG_BASCULE:
                                 show_llm_debug(step, self.agent_loop.model_name,
                                                self.agent_loop.api_url,
                                                prompt_systeme, result.text)
-                            relais_en_attente = None
+                            # Reponse vide : relancee, pas une iteration perdue.
+                            # Ses tokens restent comptes dans le step.
+                            if not result.text.strip() and vides < MAX_REPONSES_VIDES:
+                                vides += 1
+                                retries += 1
+                                continue
+                            self._relais = None
+                            self._pause_faite = False
                             current_context += result.text
-                            request_conv_time = (time.monotonic() - request_start) * 1000
                             break
                         except httpx.HTTPStatusError as e:
                             status = e.response.status_code
+                            # 413 : requete trop grosse pour CE provider (ex. ITPM
+                            # Groq). On rabote la fenetre et on renvoie.
+                            if status == 413 and self.reduire_requete(e.response, vue):
+                                vue = self.vue_dans_budget(message, self._prompt_systeme, total_input_tokens)
+                                retries += 1
+                                continue
                             if status not in STATUS_BASCULE:
                                 raise
+                            if status != 503:
+                                retries += 1
+                            self.gerer_indispo(status)
+                        except httpx.RequestError:
+                            # Timeout ou coupure reseau : meme traitement qu'un
+                            # 5xx, sauf si c'est l'echeance qui a coupe.
                             retries += 1
-                            if status == 429 or status == 501:
-                                key_var = self.agent_loop.llm.api_key_env
-                                keys = provider_keys.get(key_var, [])
-                                if key_index + 1 < len(keys):
-                                    key_index += 1
-                                    os.environ[key_var] = keys[key_index]
-                                    show_key_rotation(key_index + 1, len(keys),
-                                                      self.agent_loop.model_name, status)
-                                    continue
-                                key_index = 0
-                                if keys:
-                                    os.environ[key_var] = keys[0]
+                            self.check_budget(start, total_input_tokens, total_output_token)
+                            self.gerer_indispo("reseau")
 
-                            exhausted.append(
-                                f"{self.agent_loop.model_name} ({status})"
-                            )
-                            if self.agent_loop.model_name in gemini_pool:
-                                gemini_pool.remove(self.agent_loop.model_name)
-                            elif self.agent_loop.model_name in groq_pool:
-                                groq_pool.remove(self.agent_loop.model_name)
-
-
-                            if gemini_pool:
-                                next_model = random.choice(gemini_pool)
-                            elif groq_pool:
-                                next_model = random.choice(groq_pool)
-                            else:
-                                raise NoModelAvailableError(exhausted)
-                            self.bascule_modele(next_model)
-                            key_index = 0
-                            key_var = self.agent_loop.llm.api_key_env
-                            keys = provider_keys.get(key_var, [])
-                            if keys:
-                                os.environ[key_var] = keys[0]
-                            relais_en_attente = RELAIS_MODELE
-                            show_bascule(status, self.agent_loop.model_name,
-                                         self.agent_loop.api_url)
-
-                    total_input_tokens += result.input_tokens
-                    total_output_token += result.output_tokens
+                    total_input_tokens += step_in
+                    total_output_token += step_out
                     message.append(
                         {
                             "role": "assistant",
                             "content": result.text
                         }
                     )
-                    code = extract_code(result.text)
+                    extracted = extract_code(result.text)
                     final_answer: str | None = None
-                    if code is None:
+                    if extracted is None:
                         sandbox_input = ""
-                        sandbox_output = "No valid code block was found in the model's response."
+                        sandbox_output = (
+                            "No valid code block was found in the model's response. "
+                            "Reply with one Thought line, then one ```py code block."
+                        )
                     else:
-                        sandbox_input = code
-                        exec_res = self.agent_loop.sandbox.execute(code)
+                        sandbox_input = extracted.code
+                        exec_res = self.agent_loop.sandbox.execute(extracted.code)
                         if exec_res.final_answer is not None:
                             final_answer = exec_res.final_answer
                             sandbox_output = exec_res.stdout or ""
-                        elif exec_res.error:
-                            sandbox_output = f"error: {exec_res.error}"
                         else:
-                            sandbox_output = exec_res.stdout or "nothing bro"
+                            sandbox_output = observation(exec_res)
+                        # Sujet : un bloc interprete malgre un defaut doit etre
+                        # signale au LLM, avec la facon dont il l'a ete.
+                        if extracted.note:
+                            sandbox_output = f"[extraction: {extracted.note}]\n{sandbox_output}"
                     message.append(
                         {
                             "role": "user",
-                            "content": f"observation\n{sandbox_output}"
+                            "content": f"Observation:\n{sandbox_output}"
                         }
                     )
 
                     steps.append(
                         StepMetrics(
                             step=step,
-                            input_tokens=result.input_tokens,
-                            output_tokens=result.output_tokens,
+                            input_tokens=step_in,
+                            output_tokens=step_out,
                             request_time_ms=request_conv_time,
-                            api_url=self.agent_loop.api_url,
-                            model_name=self.agent_loop.model_name,
+                            api_url=result.api_url or self.agent_loop.api_url,
+                            model_name=result.model_name or self.agent_loop.model_name,
                             llm_output=result.text,
                             sandbox_input=sandbox_input,
                             sandbox_output=sandbox_output,
@@ -347,27 +423,32 @@ class AgentLoop:
                         )
                     if final_answer is not None:
                         clear_backup()
-                        return self.__output__(
+                        return self._output(
                             OutputParameter(
-                                task_id,
-                                benchmark,
-                                True,
-                                final_answer,
-                                step,
-                                total_request,
-                                total_input_tokens,
-                                total_output_token,
-                                start,
-                                steps,
-                                None
+                                task_id=task_id,
+                                benchmark=benchmark,
+                                success=True,
+                                solution=final_answer,
+                                iterations=step,
+                                total_requests=total_request,
+                                total_input_tokens=total_input_tokens,
+                                total_output_tokens=total_output_token,
+                                start=start,
+                                steps=steps,
+                                message=None,
                             )
                         )
                     consecutive_errors = 0
                     self.check_budget(start, total_input_tokens, total_output_token)
                 except httpx.HTTPStatusError as e:
-                    show_error(f"HTTP Error: {e.response.status_code} {e.response.reason_phrase} {self.agent_loop.model_name}")
-                    last_error = f"HTTPStatusError: {e.response.status_code}"
-                    consecutive_errors += 1
+                    status = e.response.status_code
+                    # Le corps dit POURQUOI (ex. le 400 de gpt-oss-20b, jamais
+                    # explique faute de l'avoir garde).
+                    detail = e.response.text[:300]
+                    show_error(f"HTTP Error: {status} {e.response.reason_phrase} {self.agent_loop.model_name} : {detail}")
+                    last_error = f"HTTPStatusError: {status} {detail}"
+                    if status != 503:
+                        consecutive_errors += 1
                     self.check_budget(start, total_input_tokens, total_output_token)
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                         raise ConsecutiveErrorsError(consecutive_errors, last_error)
@@ -389,23 +470,38 @@ class AgentLoop:
                         raise ConsecutiveErrorsError(consecutive_errors, last_error)
             raise MaxIterationsError(self.agent_loop.max_iterations, last_error)
         except SigStopError:
-            raise 
+            raise
         except AgentLoopError as e:
-            return self.__output__(
+            return self._output(
                 OutputParameter(
-                    task_id,
-                    benchmark,
-                    False,
-                    "",
-                    len(steps),
-                    total_request,
-                    total_input_tokens,
-                    total_output_token,
-                    start,
-                    steps,
-                    str(e)
+                    task_id=task_id,
+                    benchmark=benchmark,
+                    success=False,
+                    solution="",
+                    iterations=len(steps),
+                    total_requests=total_request,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_token,
+                    start=start,
+                    steps=steps,
+                    message=str(e),
                 )
             )
+
+    def reduire_requete(self, response: httpx.Response, vue: list[dict]) -> bool:
+        """Apprend la taille max d'une requete d'un 413 ; False si deja au plus bas.
+
+        La limite est lue dans le message (Groq : « Limit 7000 »), a 90 % ;
+        sinon on vise 70 % de la requete refusee.
+        """
+        taille = (len(self._prompt_systeme) + sum(len(m["content"]) for m in vue)) // CHARS_PAR_TOKEN
+        limite = re.search(r"Limit (\d+)", response.text)
+        plafond = int(int(limite.group(1)) * 0.9) if limite else int(taille * 0.7)
+        plafond = min(plafond, taille - 1)
+        if self._plafond_requete is not None and plafond >= self._plafond_requete:
+            return False
+        self._plafond_requete = plafond
+        return True
 
     def plafond_sortie(self, total_output_token: int) -> int:
         """`max_tokens` de la prochaine requete : le budget de sortie restant."""
@@ -421,20 +517,25 @@ class AgentLoop:
             total_input_tokens: int) -> list[dict]:
         """Plus grande vue tronquee dont la requete reste sous `max_input_tokens`.
 
-        Reduit la fenetre (3, 2, puis 1 tour intact) tant que l'estimation de
+        Respecte aussi `_plafond_requete` (taille max d'une requete, apprise
+        d'un 413). Reduit la fenetre (LAST_ITER_INTACTS tours intacts, puis un
+        de moins, jusqu'a 1) tant que l'estimation de
         la requete depasse le budget restant ; leve `MaxInputTokensError`
         AVANT l'envoi si meme un seul tour ne rentre pas.
         """
         limite = self.agent_loop.max_input_tokens
         for last_iter in range(LAST_ITER_INTACTS, 0, -1):
             vue = tronc_message(message, last_iter=last_iter)
-            if limite is None:
-                return vue
             chars = len(prompt_systeme) + sum(len(m["content"]) for m in vue)
             estimation = chars // CHARS_PAR_TOKEN
-            if total_input_tokens + estimation <= limite * MARGE_BUDGET:
+            dans_budget = limite is None or total_input_tokens + estimation <= limite * MARGE_BUDGET
+            sous_plafond = self._plafond_requete is None or estimation <= self._plafond_requete
+            if dans_budget and sous_plafond:
                 return vue
-        raise MaxInputTokensError(total_input_tokens + estimation, limite)
+        if not dans_budget:
+            raise MaxInputTokensError(total_input_tokens + estimation, limite)
+        # Plafond du provider hors d'atteinte meme a 1 tour : la plus petite vue.
+        return vue
 
     def check_budget(
             self, 
@@ -448,14 +549,13 @@ class AgentLoop:
         if (self.agent_loop.max_output_tokens is not None
             and total_output_token >= self.agent_loop.max_output_tokens):
             raise MaxOutputTokensError(total_output_token, self.agent_loop.max_output_tokens)
-        elapsed = time.monotonic() - start
-        if (
-             self.agent_loop.max_wall_time_seconds is not None
-             and elapsed >= self.agent_loop.max_wall_time_seconds
-             ):
-             raise MaxWallTimeError(elapsed, self.agent_loop.max_wall_time_seconds)
+        # Echeance = min(max_wall_time, deadline du process) - marge de sortie :
+        # on rend la main AVANT que la moulinette ne tue le process.
+        if self.delai_restant() <= 0:
+            elapsed = time.monotonic() - start
+            raise MaxWallTimeError(elapsed, self.agent_loop.max_wall_time_seconds or elapsed)
 
-    def __output__(
+    def _output(
         self,
         output_conf: OutputParameter
     ) -> SolutionOutput:

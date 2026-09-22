@@ -1,0 +1,14 @@
+Using CPython 3.10.12 interpreter at: /usr/bin/python3
+Creating virtual environment at: .venv
+   Building agent-smith @ file:///home/mobenais/Documents/Agent-Smith
+Downloading pygments (1.2MiB)
+Downloading cryptography (4.5MiB)
+Downloading pydantic-core (2.0MiB)
+Downloading ruff (9.8MiB)
+ Downloaded pygments
+ Downloaded pydantic-core
+ Downloaded cryptography
+ Downloaded ruff
+      Built agent-smith @ file:///home/mobenais/Documents/Agent-Smith
+Installed 46 packages in 7.26s
+error: aucune cle API dans l'environnement : remplis .env

@@ -1,0 +1,29 @@
+Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+429 rate limit -> token 2/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 3/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 4/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 5/5 sur gemini-3.5-flash-lite
+429 -> attente 2 s sur gemini-3.5-flash-lite (NO_BASCULE)
+429 rate limit -> token 2/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 3/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 4/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 5/5 sur gemini-3.5-flash-lite
+429 -> attente 4 s sur gemini-3.5-flash-lite (NO_BASCULE)
+429 rate limit -> token 2/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 3/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 4/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 5/5 sur gemini-3.5-flash-lite
+503 -> attente 8 s sur gemini-3.5-flash-lite (NO_BASCULE)
+429 rate limit -> token 2/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 3/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 4/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 5/5 sur gemini-3.5-flash-lite
+Disconnected from MCP server.
+
+============================================================
+success    : False
+solution   : 'diff --git a/xarray/core/merge.py b/xarray/core/merge.py\nindex ca4e29b6..dff00804 100644\n--- a/xarray/core/merge.py\n+++ b/xarray/core/merge.py\n@@ -501,7 +501,7 @@ def merge_attrs(variable_attrs, combine_attrs):\n     if combine_attrs == "drop":\n         return {}\n     elif combine_attrs == "override":\n-        return variable_attrs[0]\n+        return dict(variable_attrs[0])\n     elif combine_attrs == "no_conflicts":\n         result = dict(variable_attrs[0])\n         for attrs in variable_attrs[1:]:\n'
+iterations : 16   requests: 37
+tokens     : 119774/300000 in / 395/10000 out
+temps      : 44.4/900 s
+error      : plus aucun modele disponible, 1 ecartes -> gemini-3.5-flash-lite (429, NO_BASCULE)

@@ -8,3 +8,5 @@ class LLMResult(BaseModel):
     input_tokens: int
     output_tokens: int
     latency_ms: float
+    model_name: str = ""
+    api_url: str = ""
