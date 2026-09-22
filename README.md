@@ -110,8 +110,18 @@ By default each CLI starts its own MCP server over stdio (`mcp_tools_mbpp.py` or
 ... --mcp-stdio "python my_server.py"          # stdio
 ```
 
-API keys come only from the environment (`.env`): `GROQ_API_KEY`, `GEMINI_API_KEY`,
-`MISTRAL_API_KEY`, each accepting several comma-separated keys. `uv run -m src [edit|lcs|puzzle]`
+Which models exist, and at which endpoint, is configuration rather than code:
+**`models.json`** at the repository root lists one URL and one model list per provider,
+and `schemas/models_config.py` validates it with Pydantic and builds the providers from
+it. Adding a provider is a JSON edit — the key variables follow from its name
+(`groq` -> `GROQ_API_KEY` / `GROQ_API_KEYS`), and nothing in the registry or the agent
+loop names a provider. The file is rejected at startup with an explicit message if a
+provider has a URL but no model, a model is served twice, or a list is empty.
+
+API keys themselves never appear in it: they come only from the environment (`.env`),
+as `GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, or their plural form
+`GROQ_API_KEYS` etc., which is read first. Either accepts several comma-separated keys,
+rotated on a 429. `uv run -m src [edit|lcs|puzzle]`
 runs demo tasks with wider limits. `NO_FALLBACK=1` keeps a run on a single model (benchmark mode).
 
 ### Run the exam scripts
@@ -138,14 +148,15 @@ harness (not part of this repository) and invoked as:
 
 ### AI usage
 
-On the **execution side (bclairot)**, AI was used as a search engine for documentation and code examples. It also helped me to test a lot, understanding the requirements, the constraints and  to be sure nothing was forgotten for the mandatory tasks of the project. Also generated a first draft of the README.md file, which was then improved and completed by me.
+On the **execution side (bclairot)**, AI was used as a search engine for documentation and code examples. 
+It also helped me to test a lot, understanding the requirements, the constraints and  to be sure nothing 
+was forgotten for the mandatory tasks of the project. Also generated a first draft of the README.md file, 
+which was then improved and completed by me.
 
 On the **agent side (mobenais)**, an AI coding assistant (Claude Code) was used to review and
-refactor code (extraction without regex, shared CLI helpers, English naming, flake8), to check
+refactor code (extraction, shared CLI helpers, English naming, flake8), to check
 which free-tier models answer with real API calls, to write the benchmark scripts and simulations
-of provider failures, and to draft the benchmark report from the measured data. Every change was
-reviewed, and every result in the report comes from runs validated by the moulinette.
-<!-- mobenais: complete with your own use of AI before this session -->
+of provider failures, and to draft the benchmark report from the measured data.
 
 ## System Architecture
 
@@ -179,21 +190,30 @@ Thought -> Code -> Observation loop until `final_answer()` or a limit:
 
 1. **Prompt.** The system prompt (`schemas/tools/prompts.py`, one for MBPP, one for SWE-bench)
    is followed by the sandbox manual from `sandbox.get_manual()`, so the tool list always comes
-   from the connected MCP server, even an unknown one. `compact_manual` shortens only the limits
-   section and keeps every tool signature.
+   from the connected MCP server, even an unknown one. `compact_manual` keeps every tool
+   signature and shortens only the long `[...]` allowlists inside the limits section — the bulk
+   of it — so what follows them still reaches the model: the allowed directories, the network
+   ban and the `final_answer` contract.
 2. **History within budget.** `fit_view` sends the task and the last turns intact and shortens
    older observations (`truncate_history`), shrinking the window until the request fits the
    remaining input budget (with a 10 % margin). The limit is checked *before* each request.
 3. **Call.** `make_llm(model)` (`llm/registry.py`) builds an `OpenAICompatibleProvider` whose URL
-   and key variable come from the model's provider (Groq, Google AI Studio, Mistral). Generation
-   stops on `<end_code>` / `</tool_call>` so the model cannot invent an observation.
+   and key variable come from the model's provider (Groq, Google AI Studio, Mistral). Without
+   `--model-name`, `default_model()` picks the first model of `AUTHORIZED_LLM` whose provider
+   actually has a key in the environment. Generation stops on `<end_code>` / `</tool_call>` so
+   the model cannot invent an observation.
 4. **Extraction.** `extract_code` (`schemas/tools/tools_agent.py`) accepts a Python block (the
    primary format), Anthropic XML `<invoke>`, Hermes `<tool_call>` JSON, ReAct
    `Action:/Action Input:`, an unclosed block or code after a bare `Code:`. Non-Python calls are
-   converted into Python calls, and every repaired answer comes with a note sent back to the model.
+   converted into Python calls. **Every liberty taken is named back to the model** in a `note`
+   prefixed to the observation: a converted call, an unclosed block, a fence with no language
+   tag, a ``` inside a string mistaken for the block's end, or an answer holding several blocks
+   of which only the last ran. Notes accumulate when several apply to the same block.
 5. **Execution.** The code runs in the sandbox; stdout, stderr, errors, timeouts and truncation
    become the next `Observation`. When 2 iterations or 20 % of the input budget remain, the model
-   is told to submit (this note is sent to the model only, never written into `sandbox_output`).
+   is told to submit. That warning is added to the *copy* of the history sent with the request
+   and never stored, so it cannot still be announcing a stale step count several turns later, and
+   `sandbox_output` keeps only what the sandbox actually returned.
 6. **Provider failures.** On 429 the next API key of the same provider is used (`TokenRotator`).
    On 404/408/413/429/5xx or a network error with no key left, the loop switches to the next model
    of `AUTHORIZED_LLM` (Groq, then Gemini, then Mistral, strongest first); the new model keeps the
@@ -310,6 +330,38 @@ task the same way it would inside a real terminal session:
   still runs if the evaluator force-kills the process on timeout, not just on a
   clean exit.
 
+#### `TESTBED_PATH`
+
+`TESTBED_PATH` is the absolute path of the repository **inside the container**
+(`/testbed` in every SWE-bench image). It is unrelated to `--mcp-server`, which is
+only the transport used to reach the tool server; by default neither CLI uses a URL
+at all, since both start their server over stdio. What `TESTBED_PATH` actually
+drives, in `DockerManager`:
+
+- it is the default working directory of every command run in the container, so
+  `run_tests()` and `run_command("pytest ...")` start at the repository root rather
+  than at `/`;
+- a relative `workdir` is resolved against it before reaching Docker, whose exec API
+  rejects a relative working directory outright;
+- a relative file path is resolved against it too, which is what lets the agent write
+  `read_file("xarray/core/merge.py")` instead of the full absolute path.
+
+**It does not cross the stdio boundary on its own.** `mcp.stdio_client` passes the
+child process only a fixed allowlist of variables — `HOME`, `LOGNAME`, `PATH`,
+`SHELL`, `TERM`, `USER` on POSIX (`DEFAULT_INHERITED_ENV_VARS`) — and
+`MCPClient.build_client()` does not pass an `env=` of its own to
+`StdioServerParameters`. Launching `mcp_tools_swebench.py` through `--mcp-stdio`
+therefore fails with `no environment variable TESTBED_PATH set`, even when the
+variable is exported in the parent shell. `agent_swebench` works around this by
+re-injecting it into the command it builds:
+
+```bash
+env TESTBED_PATH=/testbed python mcp_tools_swebench.py --task-file <task>.json
+```
+
+so the variable is set by the shell that starts the server rather than inherited.
+A server started directly, or over HTTP, just reads it from its own environment.
+
 The local `docker/testbed.Dockerfile` + `scripts/docker_testbed.py` build a
 throwaway stand-in image (a tiny git repo with one seeded bug) so the 9 tools can
 be developed and smoke-tested (`scripts/test_mcp_swebench.py`) without pulling a
@@ -332,4 +384,6 @@ their `solution.json` in `BENCHMARK/`.
 - **Ablation (system prompt):** on 5 MBPP tasks, the explicit prompt (test before submitting,
   fix only what the failing assertion shows, worked example) takes `codestral-2508` from 1/5 to
   5/5; for qwen both reach 5/5 but the explicit prompt needs fewer iterations.
-- **Exam-style runs:** MBPP 5/5 on 5 random tasks run like the exam (`run-agent 120` + `validate`).
+- **Exam-style runs:** MBPP 5/5 on 5 random tasks and SWE-bench 2/3 on the exam pool, run like the
+  exam (`run-agent` + `validate`); the third SWE-bench task never started because its container
+  took longer than the MCP client's 10 s session timeout.

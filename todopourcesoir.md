@@ -37,7 +37,7 @@ Aujourd'hui `message` ne fait que grossir dans `src/agent_loop.py:261-288`, rien
 - [ ] Revérifier sur les 3 tâches de mise au point (`uno` / `dos` / `tres`) que les tokens
       d'entrée cumulés baissent bien, et de combien (chiffre à réutiliser dans le rapport)
       → pas lancé, aucun chiffre avant/après nulle part. **Et pas lançable en l'état :**
-      `src/agent_loop.py:30-42` importe `DEBUG_BASCULE` / `FORCE_429_MODELS`, que
+      `src/agent_loop.py:30-42` importe des drapeaux de debug que
       `schemas/tools_agent.py:35-38` a commentés au dernier commit → `ImportError` sur
       `import src.agent_loop`. À décommenter avant toute mesure
 
@@ -460,7 +460,7 @@ du manuel avant qu'elle n'atteigne le modèle. Le 3/3 revendiqué sur les tâche
 donc été obtenu *sans* `run_tests`, ce qui change ce que ce chiffre vaut.
 
 ~~**Bloquant immédiat :** `import src.agent_loop` lève un `ImportError`~~ — réglé,
-`DEBUG_BASCULE` et `FORCE_429_MODELS` sont décommentés, `import src.agent_loop` passe.
+les drapeaux de debug sont décommentés, `import src.agent_loop` passe.
 
 ### Coût du manuel réparé — chiffres mesurés, pas estimés
 

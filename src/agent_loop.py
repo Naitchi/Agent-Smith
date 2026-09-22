@@ -8,7 +8,7 @@ import time
 
 import httpx
 
-from llm import TokenRotator, make_llm
+from llm import TokenRotator, make_llm, spec_for_model
 from schemas import (
     STOP_SEQUENCES,
     AgentLoopConf,
@@ -41,6 +41,7 @@ from schemas.tools.limits import (
     MAX_WAITS,
     MAX_CONSECUTIVE_ERRORS,
     MAX_LIMITS_CHARS,
+    MAX_LIST_CHARS,
     MAX_OBS_CHARS,
     MAX_EMPTY_RESPONSES,
     MAX_TOKENS_PER_REQUEST,
@@ -48,10 +49,9 @@ from schemas.tools.limits import (
     FALLBACK_STATUSES,
     REQUEST_TIMEOUT_SECONDS,
 )
+from schemas.models_config import AUTHORIZED_LLM
 from schemas.tools.tools_agent import (
-    AUTHORIZED_LLM,
     DEBUG_FALLBACK,
-    FORCE_429_MODELS,
     NO_FALLBACK,
 )
 
@@ -112,14 +112,45 @@ def load_backup(task_id: str) -> dict | None:
     return state
 
 
-def compact_manual(manual: str, max_chars: int = MAX_LIMITS_CHARS) -> str:
-    """Truncate the manual's limits section, keeping tool signatures intact."""
+def shorten_lists(text: str, max_chars: int = MAX_LIST_CHARS) -> str:
+    """Keep only the first entries of every `[...]` enumeration in `text`."""
+    parts = []
+    pos = 0
+    while (start := text.find("[", pos)) != -1:
+        end = text.find("]", start)
+        if end == -1:
+            break
+        inner = text[start + 1:end]
+        parts.append(text[pos:start + 1])
+        if len(inner) > max_chars:
+            cut = inner.rfind(", ", 0, max_chars)
+            if cut == -1:
+                cut = max_chars
+            dropped = inner[cut:].count(",")
+            inner = f"{inner[:cut]}, ... +{dropped} more"
+        parts.append(inner)
+        pos = end
+    parts.append(text[pos:])
+    return "".join(parts)
+
+
+def compact_manual(manual: str, max_chars: int = MAX_LIMITS_CHARS,
+                   max_list_chars: int = MAX_LIST_CHARS) -> str:
+    """Shrink the manual's limits section, keeping tool signatures intact.
+
+    The bulk of that section is a handful of long allowlists, so they are
+    the only thing shortened: cutting the section at a fixed length would
+    drop what comes after them (allowed directories, the network ban, the
+    `final_answer` contract), which is what the model actually needs.
+    """
     limits, _, tools = manual.partition("\n")
     tools = tools.strip("\n")
+    full_length = len(limits)
+    limits = shorten_lists(limits, max_list_chars)
     if len(limits) > max_chars:
         limits = (
             limits[:max_chars]
-            + f"... (truncated, {len(limits)} chars total)"
+            + f"... (truncated, {full_length} chars total)"
         )
     return f"{limits}\n\n{tools}" if tools else limits
 
@@ -164,14 +195,12 @@ def format_observation(result: ExecutionResult) -> str:
     return "\n".join(parts) or "(no output: use print() to see values)"
 
 
-def fake_429(api_url: str) -> httpx.HTTPStatusError:
-    """Build a provider-like 429 error without any network call."""
-    request = httpx.Request("POST", api_url)
-    return httpx.HTTPStatusError(
-        "simulated 429 (FORCE_429_MODELS)",
-        request=request,
-        response=httpx.Response(429, request=request),
-    )
+def provider_name(model: str) -> str | None:
+    """Name of the provider serving `model`, or None if it is unknown."""
+    try:
+        return spec_for_model(model).name
+    except ValueError:
+        return None
 
 
 class AgentLoop:
@@ -180,11 +209,21 @@ class AgentLoop:
     def __init__(self, conf: AgentLoopConf) -> None:
         self.conf = conf
         self.request_cap: int | None = None
+        self.pinned_url = getattr(conf, "api_url_override", None)
+        self.pinned_provider = (
+            provider_name(conf.model_name) if self.pinned_url else None)
 
     def switch_model(self, model: str) -> None:
-        """Replace the LLM, its model name and its URL together."""
+        """Replace the LLM, its model name and its URL together.
+
+        An endpoint pinned with --provider-url is reused only for a model
+        of the same provider; another provider needs its own URL.
+        """
         self.request_cap = None
-        self.conf.llm = make_llm(model)
+        same_provider = (self.pinned_provider is not None
+                         and provider_name(model) == self.pinned_provider)
+        self.conf.llm = make_llm(model, self.pinned_url if same_provider
+                                 else None)
         self.conf.model_name = model
         self.conf.api_url = self.conf.llm.api_url
 
@@ -228,12 +267,12 @@ class AgentLoop:
 
         Return (result, input tokens, output tokens, retries, time in ms).
         """
-        view = self.fit_view(messages, used_in)
+        view = self.build_view(step, messages, used_in)
         self.check_budget(start, used_in, used_out)
         retries = empty = self.waits = 0
         step_in = step_out = 0
         while True:
-            self.check_budget(start, used_in, used_out)
+            self.check_budget(start, used_in + step_in, used_out + step_out)
             try:
                 request_start = time.monotonic()
                 self.total_requests += 1
@@ -257,7 +296,7 @@ class AgentLoop:
                 status = error.response.status_code
                 if status == 413 and self.shrink_request(error.response,
                                                          view):
-                    view = self.fit_view(messages, used_in)
+                    view = self.build_view(step, messages, used_in + step_in)
                     retries += 1
                     continue
                 if status not in FALLBACK_STATUSES:
@@ -267,7 +306,8 @@ class AgentLoop:
                 self.handle_unavailable(status)
             except httpx.RequestError:
                 retries += 1
-                self.check_budget(start, used_in, used_out)
+                self.check_budget(start, used_in + step_in,
+                                  used_out + step_out)
                 self.handle_unavailable("reseau")
 
     def send(self, view: list[dict], used_out: int) -> LLMResult:
@@ -275,8 +315,6 @@ class AgentLoop:
         prompt = self.system_prompt
         if self.handover:
             prompt += "\n\n" + create_newcontext(self.context, self.task)
-        if self.conf.model_name in FORCE_429_MODELS:
-            raise fake_429(self.conf.api_url)
         if hasattr(self.conf.llm, "timeout"):
             self.conf.llm.timeout = min(REQUEST_TIMEOUT_SECONDS,
                                         self.time_left())
@@ -393,8 +431,7 @@ class AgentLoop:
                         result.text)
                     messages.append({
                         "role": "user",
-                        "content": f"Observation:\n{observation}"
-                                   + self.last_call_note(step, used_in),
+                        "content": f"Observation:\n{observation}",
                     })
                     steps.append(StepMetrics(
                         step=step,
@@ -449,9 +486,28 @@ class AgentLoop:
         except AgentLoopError as error:
             return output(False, "", len(steps), str(error))
 
+    def build_view(self, step: int, messages: list[dict],
+                   used_in: int) -> list[dict]:
+        """History fitting the budget, plus the last-call warning.
+
+        The warning is added to the copy sent to the model, never to
+        `messages`: a note baked into the history would still announce
+        its own step count several turns later.
+        """
+        view = self.fit_view(messages, used_in)
+        note = self.last_call_note(step, used_in)
+        if note and view and view[-1]["role"] == "user":
+            view = view[:-1] + [
+                {**view[-1], "content": view[-1]["content"] + note}]
+        return view
+
     def last_call_note(self, step: int, used_in: int) -> str:
-        """Warn the model when few steps or input tokens are left."""
-        steps_left = self.conf.max_iterations - step
+        """Warn the model when few steps or input tokens are left.
+
+        Called when step `step` is about to be sent, so that step still
+        counts as available.
+        """
+        steps_left = self.conf.max_iterations - step + 1
         limit = self.conf.max_input_tokens
         low_tokens = (limit is not None
                       and used_in >= limit * LAST_CALL_TOKEN_RATIO)

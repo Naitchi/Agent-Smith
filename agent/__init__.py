@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from llm import has_api_key, make_llm
+from llm import default_model, has_api_key, make_llm
 from schemas import (
     SYSTEM_PROMPT_MBPP,
     SYSTEM_PROMPT_SWEBENCH,
@@ -131,9 +131,10 @@ def default_conf(model_name: str | None, provider_url: str | None,
                  sandbox: Sandbox, system_prompt: str,
                  limits: dict) -> AgentLoopConf:
     """Build the agent configuration for a benchmark's limits."""
-    llm = make_llm(model_name, provider_url) if model_name else None
+    llm = make_llm(model_name or default_model(), provider_url)
     return AgentLoopConf(
         llm=llm,
+        api_url_override=provider_url,
         sandbox=sandbox,
         system_prompt=system_prompt,
         max_iterations=limits["iterations"],

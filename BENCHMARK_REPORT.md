@@ -155,6 +155,24 @@ First contact = first step whose code names a file of the final patch; first edi
 | qwen/qwen3.8-27b | sympy__sympy-14711 | 3 | 20 | - |
 <!-- AUTO:v3:END -->
 
+### Exam-style runs (2026-09-22)
+
+Run like the exam scripts: tasks drawn by the moulinette (`dump mbpp` at random, `select --seed 7`
+from the SWE-bench exam pool), agent started with `moulinette_eval run-agent <limit>`, then
+validated. Normal mode (model fallback enabled), first model `qwen/qwen3.8-27b`.
+
+| benchmark | task | verdict | iterations | tokens in | time (s) | models used |
+|---|---|---|---|---|---|---|
+| MBPP | 271, 259, 265, 395, 98 | **5 / 5 PASS** | 2-3 | 1346-2688 | < 2 | qwen3.8-27b |
+| SWE-bench | `pydata__xarray-4629` | PASS | 9 | 47917 | 208 | qwen, gpt-oss-120b/20b, flash-lite, gemma |
+| SWE-bench | `sympy__sympy-13480` | PASS | 4 | 8305 | 88 | qwen, gpt-oss-20b |
+| SWE-bench | `scikit-learn__scikit-learn-13439` | not run | - | - | - | MCP session did not start |
+
+SWE-bench: **2 / 3**. On `scikit-learn-13439` the image had just been pulled and the container
+started after the MCP client's 10 s session timeout, so the agent stopped before its first step.
+The `xarray` run shows the fallback chain at work: Groq rate limits pushed the task through five
+models, each receiving the full history plus a handover note, and the patch was still correct.
+
 ## 3. Provider reliability
 
 - **Groq is fast but rate-limited per minute.** Requests take 0.5 to 1.2 s, but in v3 only

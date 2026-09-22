@@ -4,47 +4,13 @@ import ast
 import json
 import keyword
 import os
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..extracted_code import ExtractedCode
 from .prompts import END_CODE
 
-FORCE_429_MODELS = {
-    model.strip()
-    for model in os.environ.get("FORCE_429_MODELS", "").split(",")
-    if model.strip()
-}
 DEBUG_FALLBACK = os.environ.get("DEBUG_FALLBACK", "") not in ("", "0")
 NO_FALLBACK = os.environ.get("NO_FALLBACK", "") not in ("", "0")
-
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GEMINI_API_URL = ("https://generativelanguage.googleapis.com/v1beta/openai/"
-                  "chat/completions")
-MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
-
-AUTHORIZED_GROQ = [
-    "qwen/qwen3.8-27b",
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-]
-AUTHORIZED_GEMINI = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite",
-    "gemma-4-31b-it",
-    "gemma-4-26b-a4b-it",
-]
-AUTHORIZED_MISTRAL = [
-    "codestral-2508",
-    "ministral-14b-2512",
-    "ministral-8b-2512",
-    "ministral-3b-2512",
-]
-AUTHORIZED_LLM = AUTHORIZED_GROQ + AUTHORIZED_GEMINI + AUTHORIZED_MISTRAL
 
 PYTHON_FENCE_LANGS = {
     "", "python", "py", "python3", "py3", "ipython", "tool_code"}
@@ -155,8 +121,17 @@ def is_valid_python(code: str) -> bool:
     return True
 
 
-def split_blocks(text: str) -> list[tuple[str, str, bool]]:
-    """Return every fenced block as (language, code, closed)."""
+class Block(NamedTuple):
+    """One fenced block found in an answer, and how it was delimited."""
+
+    lang: str
+    code: str
+    closed: bool
+    skipped_fence: bool = False
+
+
+def split_blocks(text: str) -> list[Block]:
+    """Return every fenced block found in `text`."""
     blocks = []
     lines = text.splitlines(keepends=True)
     i = 0
@@ -170,30 +145,48 @@ def split_blocks(text: str) -> list[tuple[str, str, bool]]:
         ends = [j for j in range(start, len(lines))
                 if lines[j].strip() == fence]
         if not ends:
-            blocks.append((lang, "".join(lines[start:]), False))
+            blocks.append(Block(lang, "".join(lines[start:]), False))
             break
         end = ends[0]
         if lang in PYTHON_FENCE_LANGS:
             end = next((j for j in ends
                         if is_valid_python("".join(lines[start:j]))), end)
-        blocks.append((lang, "".join(lines[start:end]), True))
+        blocks.append(Block(lang, "".join(lines[start:end]), True,
+                            skipped_fence=end != ends[0]))
         i = end + 1
     return blocks
+
+
+def repair_notes(block: Block, total: int) -> list[str]:
+    """Explain every liberty taken to read `block` as Python."""
+    notes = []
+    if not block.closed:
+        notes.append("Your code block was not closed; everything after "
+                     "the opening fence was run as Python.")
+    if not block.lang:
+        notes.append("Your code fence carried no language tag; its content "
+                     "was run as Python. Open it with ```py.")
+    if block.skipped_fence:
+        notes.append("A ``` inside your code block was read as part of the "
+                     "code, not as its end.")
+    if total > 1:
+        notes.append(f"Your answer held {total} code blocks; only the last "
+                     "one was run. Send exactly one block per step.")
+    return notes
 
 
 def extract_python_block(text: str) -> ExtractedCode | None:
     """Last Python block, an unclosed one, or a ```json tool call."""
     blocks = split_blocks(text)
-    for lang, code, closed in reversed(blocks):
-        if lang in PYTHON_FENCE_LANGS and code.strip():
-            note = None
-            if not closed:
-                note = ("Your code block was not closed; everything after "
-                        "the opening fence was run as Python.")
-            return ExtractedCode(code=code.strip("\n"), format="python",
-                                 note=note)
+    python = [block for block in blocks
+              if block.lang in PYTHON_FENCE_LANGS and block.code.strip()]
+    if python:
+        block = python[-1]
+        notes = repair_notes(block, len(python))
+        return ExtractedCode(code=block.code.strip("\n"), format="python",
+                             note=" ".join(notes) or None)
 
-    for lang, code, _ in reversed(blocks):
+    for lang, code, *_ in reversed(blocks):
         if lang != "json":
             continue
         try:

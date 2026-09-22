@@ -9,6 +9,7 @@ from .provider import (
 from .registry import (
     PROVIDERS,
     ProviderSpec,
+    default_model,
     has_api_key,
     make_llm,
     spec_for_model,
@@ -23,6 +24,7 @@ __all__ = [
     "OpenAICompatibleProvider",
     "ProviderSpec",
     "TokenRotator",
+    "default_model",
     "has_api_key",
     "make_llm",
     "spec_for_model",
