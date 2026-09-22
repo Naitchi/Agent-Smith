@@ -49,9 +49,13 @@ La seule chose que mobenais connaît de bclairot : `Sandbox.execute()`, `Sandbox
 - [x] Python **3.10** exactement, `uv` comme gestionnaire de paquets
 - [x] `pyproject.toml` avec les entry points :
   - [x] `sandbox = "agent_smith.sandbox.cli:main"` → `uv run sandbox`
-  - [ ] `agent_mbpp` et `agent_swebench` importables → `uv run python -m agent_mbpp`
-        *(`src/agent_MBPP.py` existe mais est vide (0 octet) et non commité ; aucun entry point
-        dans `pyproject.toml`, qui n'expose que `sandbox`)*
+  - [x] `agent_mbpp` et `agent_swebench` importables → `uv run python -m agent_mbpp`
+        *(vérifié le 2026-09-22 depuis la racine, **sans** `PYTHONPATH` : ce ne sont pas des
+        entry points `[project.scripts]` mais des `packages` de hatch
+        (`agent/agent_mbpp`, `agent/agent_swebench`), et `uv` installe le projet en éditable
+        (`_editable_impl_agent_smith.pth`). C'est aussi ce qui fait que `PROJECT_ROOT` résout
+        vers le vrai dossier du projet, donc que `models.json` et `mcp_tools_*.py` sont
+        trouvés. Le `PYTHONPATH=agent` du Makefile, devenu inutile, a été retiré)*
 - [x] `.env.example`, `.gitignore` (`.env`, `cache/`, `evaluations/`)
 - [x] `sandbox_template.json` à la racine
 - [x] `mcp_tools_mbpp.py` et `mcp_tools_swebench.py` à la racine (imposé par le sujet)
