@@ -29,7 +29,18 @@ class SandboxProtocol(Protocol):
 
 
 class LLMProtocol(Protocol):
-    model: str
+    """What the agent loop needs from a provider, whichever it is."""
 
-    def __call__(self, system: str, messages: list[dict]) -> LLMResult:
+    model: str
+    api_url: str
+    api_key_env: str
+
+    def __call__(
+        self,
+        system: str,
+        messages: list[dict],
+        stop: list[str] | None = ...,
+        max_tokens: int = ...,
+        temperature: float = ...,
+    ) -> LLMResult:
         ...

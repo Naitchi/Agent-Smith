@@ -16,7 +16,7 @@ dependencies = [
 sandbox = "src.sandbox.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.5"]
+dev = ["pytest>=8.0", "ruff>=0.5", "mypy>=1.10", "flake8>=7.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -27,6 +27,16 @@ packages = ["src", "schemas", "llm", "agent/agent_mbpp", "agent/agent_swebench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+exclude = ["^moulinette/", "^\\.venv/", "^BENCHMARK/", "^cache/"]
+
+[[tool.mypy.overrides]]
+# Third-party packages that ship no type information. `types-docker` and
+# friends are not dependencies we want to add just for the checker, and
+# `moulinette` is the evaluation harness, not our code.
+module = ["docker.*", "dill.*", "moulinette.*"]
+ignore_missing_imports = true
 
 [tool.ruff.lint.per-file-ignores]
 # The sandbox is an isolation boundary: it runs untrusted code and bridges

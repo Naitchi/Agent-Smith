@@ -35,5 +35,12 @@ clean:
 fclean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name "backup_memory" -exec rm -rf {} +
+	find . -type d -name ".mypy_cache" -exec rm -rf {} +
 	rm -rf .venv
 	rm -f .env
+	
+LINT_EXCLUDE = moulinette,.venv,BENCHMARK,cache
+
+lint:
+	uv run flake8 --extend-exclude $(LINT_EXCLUDE) .
+	uv run mypy .

@@ -32,11 +32,13 @@ class AgentLoopConf:
         from llm import default_model, make_llm
         from src.sandbox import Sandbox
 
-        self.llm = llm if llm is not None else make_llm(default_model())
-        self.model_name = self.llm.model
-        self.api_url = api_url or getattr(self.llm, "api_url", "")
-        self.api_url_override = api_url_override
-        self.sandbox = sandbox if sandbox is not None else Sandbox()
+        self.llm: LLMProtocol = (llm if llm is not None
+                                 else make_llm(default_model()))
+        self.model_name: str = self.llm.model
+        self.api_url: str = api_url or self.llm.api_url
+        self.api_url_override: str | None = api_url_override
+        self.sandbox: SandboxProtocol = (sandbox if sandbox is not None
+                                         else Sandbox())
         self.system_prompt = system_prompt
         self.max_iterations = max_iterations
         self.max_input_tokens = max_input_tokens
