@@ -19,6 +19,7 @@ from agent import (
     AgentLoop,
     Sandbox,
     SandboxConfig,
+    SandboxProtocol,
     SWEBenchTaskInput,
     build_user_prompt,
     check_api_key,
@@ -54,7 +55,7 @@ def is_patch(text: str | None) -> bool:
     )
 
 
-def fetch_patch(sandbox: Sandbox) -> str | None:
+def fetch_patch(sandbox: SandboxProtocol) -> str | None:
     """Read the container's current diff; call it before closing the sandbox.
     """
     try:
@@ -95,7 +96,7 @@ def main() -> None:
         )
         if not is_patch(out.solution):
             patch = fetch_patch(conf.sandbox)
-            if is_patch(patch):
+            if patch is not None and is_patch(patch):
                 out.solution = patch
         write_output(out, args.output)
     finally:

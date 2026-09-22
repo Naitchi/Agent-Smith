@@ -17,6 +17,7 @@ from schemas import (
     AgentLoopConf,
     MBPPTaskInput,
     SandboxConfig,
+    SandboxProtocol,
     SolutionOutput,
     SWEBenchTaskInput,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "SWEBenchTaskInput",
     "Sandbox",
     "SandboxConfig",
+    "SandboxProtocol",
     "build_user_prompt",
     "check_api_key",
     "default_conf",

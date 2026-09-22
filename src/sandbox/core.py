@@ -231,7 +231,9 @@ class Sandbox(
             tool_docs: Tool name -> description, propagated onto each
                 proxy's `__doc__` (see `_make_tool_proxy`).
         """
-        socket.socket = self._blocked_call
+        # Replacing the class with a raising function is the point: mypy
+        # has no way to express it, hence the ignore.
+        socket.socket = self._blocked_call  # type: ignore[misc, assignment]
         signal.signal(signal.SIGTERM, self._timeout_handler)
         limit_bytes = self.config.max_memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))

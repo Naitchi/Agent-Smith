@@ -209,9 +209,22 @@ class AgentLoop:
     def __init__(self, conf: AgentLoopConf) -> None:
         self.conf = conf
         self.request_cap: int | None = None
-        self.pinned_url = getattr(conf, "api_url_override", None)
-        self.pinned_provider = (
+        self.pinned_url: str | None = conf.api_url_override
+        self.pinned_provider: str | None = (
             provider_name(conf.model_name) if self.pinned_url else None)
+        # Set again at the top of run(), which is the real start of a task;
+        # declared here so every method sees one definite type.
+        self.rotator: TokenRotator = TokenRotator()
+        self.fallback_models: list[str] = []
+        self.exhausted: list[str] = []
+        self.paused = False
+        self.handover = False
+        self.waits = 0
+        self.total_requests = 0
+        self.context = ""
+        self.task = ""
+        self.system_prompt = conf.system_prompt
+        self.deadline_at = float("inf")
 
     def switch_model(self, model: str) -> None:
         """Replace the LLM, its model name and its URL together.
@@ -392,7 +405,7 @@ class AgentLoop:
                 self.context = backup.get("current_context", "")
                 self.handover = True
 
-        self.exhausted: list[str] = []
+        self.exhausted = []
         self.paused = False
         self.rotator = TokenRotator()
         if previous_model:
@@ -549,7 +562,7 @@ class AgentLoop:
                          or estimate <= self.request_cap)
             if in_budget and under_cap:
                 return view
-        if not in_budget:
+        if not in_budget and limit is not None:
             raise MaxInputTokensError(used_in + estimate, limit)
         return view
 

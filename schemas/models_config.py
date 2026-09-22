@@ -43,7 +43,7 @@ class ModelsConfig(BaseModel):
 
     @model_validator(mode="after")
     def check_providers_match(self) -> ModelsConfig:
-        """Every provider needs a URL and at least one model, and vice versa."""
+        """Every provider needs a URL and a model, and the other way round."""
         missing_models = set(self.api_urls) - set(self.models)
         missing_urls = set(self.models) - set(self.api_urls)
         if missing_models or missing_urls:
