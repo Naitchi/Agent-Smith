@@ -20,10 +20,6 @@ class TokenRotator:
             keys = [key.strip() for key in raw.split(",") if key.strip()]
             self.keys[provider.api_key_env] = keys
             if keys:
-                # reset_key() replaces api_key_env with the single active
-                # key, so mirror the full list into keys_env first: it is
-                # read before api_key_env, and a later rotator would
-                # otherwise only ever see that one key.
                 os.environ[provider.keys_env] = ",".join(keys)
             self.reset_key(provider.api_key_env)
 

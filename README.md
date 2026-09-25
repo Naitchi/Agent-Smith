@@ -44,14 +44,22 @@ The project is split into two independent halves behind one interface contract:
 ### Install
 
 ```bash
-make install        # uv sync, then creates .env from .env.example
+make install        # uv sync, then writes .env with empty keys (overwrites an existing one)
 ```
 
 or manually:
 
 ```bash
 uv sync
-cp .env.example .env
+```
+
+then create a `.env` at the repository root:
+
+```bash
+GROQ_API_KEY=
+GEMINI_API_KEY=
+MISTRAL_API_KEY=
+TESTBED_PATH=
 ```
 
 Fill in `.env` with your LLM provider API key(s) (see [Agent Loop](#agent-loop)
@@ -63,7 +71,7 @@ below for which environment variables are read).
 uv run sandbox                                              # bare REPL, no MCP server
 uv run sandbox sandbox_template.json                        # with a config file
 uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py"       # connect an MCP server over stdio
-uv run sandbox --mcp-server http://localhost:8080           # connect one over HTTP
+uv run sandbox --mcp-server http://localhost:8080/mcp       # connect one over HTTP
 ```
 
 Each line typed is executed and remembered across the session (variables persist,
@@ -78,16 +86,8 @@ uv run python mcp_tools_swebench.py --task-file cache/swebench_task.json
 
 Both support `--http --host --port` for streamable HTTP instead of stdio. The
 SWE-bench server additionally needs a **`TESTBED_PATH`** environment variable set
-to the repository root before it starts (see `.env.example`) — the moulinette sets
+to the repository root before it starts (a `TESTBED_PATH=` line in `.env`) — the moulinette sets
 this itself when testing the tools in isolation.
-
-To try the SWE-bench tools against a local throwaway container instead of pulling a
-real multi-GB SWE-bench image:
-
-```bash
-uv run python ./scripts/docker_testbed.py start
-uv run python ./scripts/test_mcp_swebench.py
-```
 
 ### Run the agent loop
 
@@ -115,8 +115,9 @@ Which models exist, and at which endpoint, is configuration rather than code:
 and `schemas/models_config.py` validates it with Pydantic and builds the providers from
 it. Adding a provider is a JSON edit — the key variables follow from its name
 (`groq` -> `GROQ_API_KEY` / `GROQ_API_KEYS`), and nothing in the registry or the agent
-loop names a provider. The file is rejected at startup with an explicit message if a
-provider has a URL but no model, a model is served twice, or a list is empty.
+loop names a provider. The file is rejected at startup with an explicit message if it is
+missing or not valid JSON, a provider has a URL but no model, a model is served twice, or a
+list is empty.
 
 API keys themselves never appear in it: they come only from the environment (`.env`),
 as `GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, or their plural form
@@ -144,7 +145,7 @@ harness (not part of this repository) and invoked as:
 - [Model Context Protocol](https://modelcontextprotocol.io/) — the tool/resource/
   prompt protocol the sandbox speaks to the MCP servers
 - [SWE-bench](https://www.swebench.com/) — the benchmark and its harness
-  (`swebench` package, used by `moulinette/swebench/interact.py`)
+  (`swebench` package, used by the moulinette's `swebench/interact.py`)
 
 ### AI usage
 
@@ -215,7 +216,7 @@ Thought -> Code -> Observation loop until `final_answer()` or a limit:
    and never stored, so it cannot still be announcing a stale step count several turns later, and
    `sandbox_output` keeps only what the sandbox actually returned.
 6. **Provider failures.** On 429 the next API key of the same provider is used (`TokenRotator`).
-   On 404/408/413/429/5xx or a network error with no key left, the loop switches to the next model
+   On 404/408/413/429/500/502/503/504 or a network error with no key left, the loop switches to the next model
    of `AUTHORIZED_LLM` (Groq, then Gemini, then Mistral, strongest first); the new model keeps the
    whole history plus a handover note (`create_newcontext`). If every model failed, it waits 60 s
    and tries a full round again before giving up. A 413 first shrinks the history.
@@ -288,8 +289,8 @@ functions and the generated manual (`get_manual()`) automatically.
 ### MBPP (`mcp_tools_mbpp.py`)
 
 One mandatory tool, `run_tests(code, test_list=None)`: runs the candidate solution
-against each assertion in a separate `multiprocessing.Process` (same isolation
-rationale as the sandbox itself), under a wall-clock timeout via `SIGTERM`, and
+against each assertion, one after the other, in a separate `multiprocessing.Process`
+(same isolation rationale as the sandbox itself), under a wall-clock timeout via `SIGTERM`, and
 returns `{"success": bool, "output": str}` as JSON — `output` holds the first
 failing assertion plus captured stdout/stderr, truncated with an explicit notice
 past `max_std_length`. A `check_syntax(code)` tool is included as an extra, so the
@@ -362,11 +363,6 @@ env TESTBED_PATH=/testbed python mcp_tools_swebench.py --task-file <task>.json
 so the variable is set by the shell that starts the server rather than inherited.
 A server started directly, or over HTTP, just reads it from its own environment.
 
-The local `docker/testbed.Dockerfile` + `scripts/docker_testbed.py` build a
-throwaway stand-in image (a tiny git repo with one seeded bug) so the 9 tools can
-be developed and smoke-tested (`scripts/test_mcp_swebench.py`) without pulling a
-multi-GB real SWE-bench image.
-
 ## Benchmark Results and Analysis
 
 Full data, tables and analysis: [`BENCHMARK_REPORT.md`](BENCHMARK_REPORT.md); raw runs and
@@ -384,6 +380,3 @@ their `solution.json` in `BENCHMARK/`.
 - **Ablation (system prompt):** on 5 MBPP tasks, the explicit prompt (test before submitting,
   fix only what the failing assertion shows, worked example) takes `codestral-2508` from 1/5 to
   5/5; for qwen both reach 5/5 but the explicit prompt needs fewer iterations.
-- **Exam-style runs:** MBPP 5/5 on 5 random tasks and SWE-bench 2/3 on the exam pool, run like the
-  exam (`run-agent` + `validate`); the third SWE-bench task never started because its container
-  took longer than the MCP client's 10 s session timeout.

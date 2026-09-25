@@ -99,16 +99,21 @@ def load_backup(task_id: str) -> dict | None:
     """Return the saved state if it belongs to `task_id`, else None."""
     if not BACKUP_FILE.exists() or BACKUP_FILE.stat().st_size == 0:
         return None
-    with open(BACKUP_FILE) as file:
-        state = json.load(file)
-    if state.get("task_id") != task_id:
+    try:
+        with open(BACKUP_FILE) as file:
+            state = json.load(file)
+        if state.get("task_id") != task_id:
+            return None
+        messages = state.get("messages") or []
+        if messages and messages[-1]["role"] == "assistant":
+            messages.pop()
+        state["messages"] = messages
+        state["steps"] = [StepMetrics.model_validate(step)
+                          for step in state.get("steps", [])]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        show_error(f"{BACKUP_FILE}: unreadable backup, starting over "
+                   f"({type(error).__name__}: {error})")
         return None
-    messages = state.get("messages") or []
-    if messages and messages[-1]["role"] == "assistant":
-        messages.pop()
-    state["messages"] = messages
-    state["steps"] = [
-        StepMetrics.model_validate(step) for step in state.get("steps", [])]
     return state
 
 
@@ -212,8 +217,6 @@ class AgentLoop:
         self.pinned_url: str | None = conf.api_url_override
         self.pinned_provider: str | None = (
             provider_name(conf.model_name) if self.pinned_url else None)
-        # Set again at the top of run(), which is the real start of a task;
-        # declared here so every method sees one definite type.
         self.rotator: TokenRotator = TokenRotator()
         self.fallback_models: list[str] = []
         self.exhausted: list[str] = []

@@ -9,6 +9,9 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
+
+from pydantic import ValidationError
 
 from llm import default_model, has_api_key, make_llm
 from schemas import (
@@ -21,6 +24,7 @@ from schemas import (
     SolutionOutput,
     SWEBenchTaskInput,
 )
+from schemas.models_config import AUTHORIZED_LLM
 from schemas.tools.limits import (
     MBPP_LIMITS,
     MBPP_MCP_SERVER,
@@ -32,7 +36,7 @@ from schemas.tools.limits import (
 from src.agent_loop import AgentLoop
 from src.display_func import show_error, show_summary
 from src.sandbox import Sandbox
- 
+
 PROCESS_START = time.monotonic()
 
 __all__ = [
@@ -65,18 +69,40 @@ __all__ = [
 ]
 
 
+def is_http_url(value: str) -> bool:
+    """Return True if `value` is an http(s) URL with a host."""
+    url = urlparse(value)
+    return url.scheme in ("http", "https") and bool(url.netloc)
+
+
 def parse_args(prog: str) -> argparse.Namespace:
-    """Parse the command line shared by both agent CLIs."""
+    """Parse and check the command line shared by both agent CLIs."""
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--task-file", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-name", default=None)
     parser.add_argument("--provider-url", default=None)
-    parser.add_argument("--mcp-server", default=None,
-                        help="URL of a streamable HTTP MCP server")
-    parser.add_argument("--mcp-stdio", default=None,
-                        help="command launching an MCP server over stdio")
-    return parser.parse_args()
+    mcp = parser.add_mutually_exclusive_group()
+    mcp.add_argument("--mcp-server", default=None,
+                     help="URL of a streamable HTTP MCP server")
+    mcp.add_argument("--mcp-stdio", default=None,
+                     help="command launching an MCP server over stdio")
+    args = parser.parse_args()
+
+    if not args.task_file.is_file():
+        parser.error(f"--task-file: no such file: {args.task_file}")
+    if args.output.is_dir():
+        parser.error(f"--output: {args.output} is a directory")
+    if args.model_name is not None and args.model_name not in AUTHORIZED_LLM:
+        parser.error(f"--model-name: unknown model {args.model_name!r}, "
+                     f"choose from: {', '.join(AUTHORIZED_LLM)}")
+    for option, value in (("--provider-url", args.provider_url),
+                          ("--mcp-server", args.mcp_server)):
+        if value is not None and not is_http_url(value):
+            parser.error(f"{option}: not an http(s) URL: {value!r}")
+    if args.mcp_stdio is not None and not args.mcp_stdio.strip():
+        parser.error("--mcp-stdio: empty command")
+    return args
 
 
 def mcp_target(args: argparse.Namespace, default_command: str) -> dict:
@@ -94,9 +120,25 @@ def check_api_key() -> None:
 
 
 def load_task(path: Path, model):
-    """Load and validate a task file with the given task schema."""
-    with open(path) as file:
-        return model.model_validate(json.load(file))
+    """Load and validate a task file; raise ValueError if it is broken."""
+    try:
+        with open(path) as file:
+            return model.model_validate(json.load(file))
+    except OSError as error:
+        raise ValueError(
+            f"{path}: cannot read task file: {error.strerror}") from None
+    except UnicodeDecodeError:
+        raise ValueError(f"{path}: task file is not UTF-8 text") from None
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"{path}: invalid JSON (line {error.lineno}, "
+            f"column {error.colno}): {error.msg}") from None
+    except ValidationError as error:
+        fields = "; ".join(
+            f"{'.'.join(map(str, item['loc'])) or 'root'}: {item['msg']}"
+            for item in error.errors())
+        raise ValueError(
+            f"{path}: not a valid {model.__name__}: {fields}") from None
 
 
 def build_user_prompt(task: MBPPTaskInput | SWEBenchTaskInput) -> str:
@@ -149,8 +191,12 @@ def default_conf(model_name: str | None, provider_url: str | None,
 
 def write_output(out: SolutionOutput, path: Path) -> None:
     """Write the solution as JSON, creating parent directories."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(out.model_dump_json(indent=2))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(out.model_dump_json(indent=2))
+    except OSError as error:
+        raise RuntimeError(
+            f"{path}: cannot write solution: {error.strerror}") from None
 
 
 def run_cli(main: Callable[[], None]) -> None:

@@ -1,10 +1,17 @@
 Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+503 -> attente 20 s sur gemini-3.5-flash-lite (NO_FALLBACK)
+503 -> attente 20 s sur gemini-3.5-flash-lite (NO_FALLBACK)
+503 -> attente 20 s sur gemini-3.5-flash-lite (NO_FALLBACK)
+503 -> attente 20 s sur gemini-3.5-flash-lite (NO_FALLBACK)
+503 -> attente 20 s sur gemini-3.5-flash-lite (NO_FALLBACK)
+reseau -> attente 20 s sur gemini-3.5-flash-lite (NO_FALLBACK)
 Disconnected from MCP server.
 
 ============================================================
 success    : False
-solution   : ''
-iterations : 23   requests: 24
-tokens     : 272014/300000 in / 4656/10000 out
-temps      : 210.7/900 s
-error      : max_input_tokens exceeded (277302/300000)
+solution   : 'diff --git a/sympy/physics/vector/vector.py b/sympy/physics/vector/vector.py\nindex a048ee57f..d7dce428e 100644\n--- a/sympy/physics/vector/vector.py\n+++ b/sympy/physics/vector/vector.py\n@@ -60,6 +60,8 @@ def __add__(self, other):\n         other = _check_vector(other)\n         return Vector(self.args + other.args)\n \n+    __radd__ = __add__\n+\n     def __and__(self, other):\n         """Dot product of two vectors.\n \n@@ -721,6 +723,8 @@ def __init__(self, other, want):\n \n \n def _check_vector(other):\n+    if other == 0:\n+        return Vector(0)\n     if not isinstance(other, Vector):\n         raise TypeError(\'A Vector must be supplied\')\n     return other\n'
+iterations : 17   requests: 25
+tokens     : 97823/300000 in / 2814/10000 out
+temps      : 887.8/900 s
+error      : max_wall_time_seconds exceeded (887.8s/900s)
+Exécution du script terminée.

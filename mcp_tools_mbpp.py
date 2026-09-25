@@ -245,8 +245,6 @@ class MCPServerMBPP:
         content_stderr = temp_stderr.read()
         stdout: str = content_stdout[: self.max_std_length]
         stderr: str = content_stderr[: self.max_std_length]
-        # TODO prendre les 700 premiers et les 700 derniers caractères pour
-        # avoir un aperçu du début et de la fin
         if len(content_stdout) > self.max_std_length:
             stdout += "..."
         if len(content_stderr) > self.max_std_length:

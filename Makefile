@@ -5,6 +5,7 @@ MODEL ?= qwen/qwen3.8-27b
 
 install:
 	uv sync
+	rm -rf .env.example
 	echo "Please edit .env file to add your API keys."
 	echo "GROQ_API_KEY=" > .env
 	echo "GEMINI_API_KEY=" >> .env
@@ -24,10 +25,6 @@ run_mbpp:
 run_sw-bench:
 	uv run python -m agent_swebench --task-file $(SWE_TASK) --output $(OUT) $(if $(MODEL),--model-name $(MODEL))
 
-
-bench:
-	scripts/run_benchmark.sh
-
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name "backup_memory" -exec rm -rf {} + 
@@ -36,11 +33,14 @@ fclean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name "backup_memory" -exec rm -rf {} +
 	find . -type d -name ".mypy_cache" -exec rm -rf {} +
+	echo "GROQ_API_KEY=" > .env.example
+	echo "GEMINI_API_KEY=" >> .env.example
+	echo "MISTRAL_API_KEY=" >> .env.example
+	echo "TESTBED_PATH=" >> .env.example
 	rm -rf .venv
 	rm -f .env
-	
-LINT_EXCLUDE = moulinette,.venv,BENCHMARK,cache
+
 
 lint:
-	uv run flake8 --extend-exclude $(LINT_EXCLUDE) .
+	uv run flake8 --extend-exclude moulinette,.venv,BENCHMARK,cache .
 	uv run mypy .

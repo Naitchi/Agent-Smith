@@ -90,9 +90,18 @@ class ModelsConfig(BaseModel):
 
 
 def load_models_config(path: Path = MODELS_FILE) -> ModelsConfig:
-    """Read and validate `models.json`."""
-    with open(path) as file:
-        return ModelsConfig.model_validate(json.load(file))
+    """Read and validate `models.json`, exit with a clear message if broken."""
+    try:
+        with open(path) as file:
+            return ModelsConfig.model_validate(json.load(file))
+    except FileNotFoundError:
+        raise SystemExit(f"{path.name}: file not found at {path}") from None
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"{path.name}: invalid JSON "
+                         f"(line {e.lineno}, column {e.colno}): {e.msg}"
+                         ) from None
+    except ValueError as e:
+        raise SystemExit(f"{path.name}: invalid config: {e}") from None
 
 
 MODELS_CONFIG = load_models_config()

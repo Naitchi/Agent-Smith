@@ -12,7 +12,6 @@ from schemas.models_config import AUTHORIZED_LLM, PROVIDERS, ProviderConfig
 
 from .provider import OpenAICompatibleProvider
 
-# `ProviderSpec` is the historical name of a provider entry in this module.
 ProviderSpec = ProviderConfig
 
 

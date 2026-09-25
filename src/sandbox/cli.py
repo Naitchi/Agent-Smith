@@ -60,8 +60,6 @@ def main() -> None:
     else:
         sandbox = Sandbox(command_stdio=args.mcp_stdio, url=args.mcp_server)
     try:
-        # TODO voir pour tester avec du code avec des fonctions de plusieurs
-        # lignes avec codeop ? ou code.InteractiveConsole ?
         print(
             "\nSandbox REPL. Enter the code you need to execute. Each line "
             "will be executed and remenbered. Type 'exit' to exit."

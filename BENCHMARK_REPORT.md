@@ -13,7 +13,7 @@
 | `gemini-3.6-flash` | Google AI Studio | most recent Gemini available when the benchmark started |
 
 Mistral (`codestral-2508`, `ministral-*`) was added to the fallback list later and is used in the
-prompt ablation (section 5) and in the exam-style runs, but not in the 5 x 3 grid below.
+prompt ablation (section 5), but not in the 5 x 3 grid below.
 
 **Tasks (3 SWE-bench Verified instances).**
 
@@ -34,7 +34,7 @@ model. A run that dies because the provider is unavailable (quota, overload) is 
 **INDISPO**, gets no verdict and is retried on the next launch.
 
 - **v1**: first version (regex extraction, immediate abort on provider errors, backoff on 429).
-- **v3**: current version (extraction without regex, three 20 s waits on the same model before
+- **v2**: current version (extraction without regex, three 20 s waits on the same model before
   giving up, handover note, last-call warning added afterwards).
 
 ## 2. Results
@@ -97,8 +97,8 @@ First contact = first step whose code names a file of the final patch; first edi
 | qwen/qwen3.8-27b | sympy__sympy-14711 | 3 | 11 | - |
 <!-- AUTO:v1:END -->
 
-<!-- AUTO:v3:START -->
-### Results (v3)
+<!-- AUTO:v2:START -->
+### Results (v2)
 
 `final_answer`: no = the agent did not submit by itself; the CLI returned the container's patch (`get_patch()`), which is what was validated. INDISPO = provider unavailable (quota or overload).
 
@@ -120,7 +120,7 @@ First contact = first step whose code names a file of the final patch; first edi
 | qwen/qwen3.8-27b | sympy__sympy-13480 | PASS | yes | 4 | 9677 | 195 | 38 |
 | qwen/qwen3.8-27b | sympy__sympy-14711 | PASS | no | 23 | 91268 | 2398 | 749 |
 
-### Provider reliability (v3)
+### Provider reliability (v2)
 
 Average time = mean `request_time_ms` of the steps. Retries = sum of step `retries` (429, network, empty answers). Useful requests = steps / requests sent. Availability = runs not INDISPO / runs launched.
 
@@ -132,7 +132,7 @@ Average time = mean `request_time_ms` of the steps. Retries = sum of step `retri
 | openai/gpt-oss-120b | 1.2 | 210 | 33/268 | 2/3 |
 | qwen/qwen3.8-27b | 0.6 | 175 | 32/216 | 3/3 |
 
-### Intermediary metrics (v3)
+### Intermediary metrics (v2)
 
 First contact = first step whose code names a file of the final patch; first edit = first `edit_file` on that file. Discipline = iterations between the first passing `run_tests()` and `final_answer` (ideal 0; "?" when the test summary was truncated).
 
@@ -153,51 +153,87 @@ First contact = first step whose code names a file of the final patch; first edi
 | qwen/qwen3.8-27b | pydata__xarray-4629 | 2 | 3 | 0 |
 | qwen/qwen3.8-27b | sympy__sympy-13480 | 1 | 2 | ? |
 | qwen/qwen3.8-27b | sympy__sympy-14711 | 3 | 20 | - |
+<!-- AUTO:v2:END -->
+
+<!-- AUTO:v3:START -->
+### Results (v3)
+
+`final_answer`: no = the agent did not submit by itself; the CLI returned the container's patch (`get_patch()`), which is what was validated. INDISPO = provider unavailable (quota or overload).
+
+| model | task | verdict | final_answer | iterations | tokens in | tokens out | time (s) |
+|---|---|---|---|---|---|---|---|
+| gemini-3.5-flash | sympy__sympy-13480 | INDISPO | no | 0 | 0 | 0 | 75 |
+| gemini-3.5-flash | sympy__sympy-14711 | INDISPO | no | 3 | 4378 | 132 | 311 |
+| gemini-3.5-flash-lite | sympy__sympy-14711 | FAIL | no | 17 | 97823 | 2814 | 888 |
+| gemini-3.6-flash | sympy__sympy-14711 | INDISPO | no | 15 | 147008 | 2141 | 313 |
+| openai/gpt-oss-120b | sympy__sympy-14711 | FAIL | no | 23 | 112134 | 7105 | 888 |
+| qwen/qwen3.8-27b | sympy__sympy-14711 | PASS | yes | 14 | 54637 | 1758 | 438 |
+
+### Provider reliability (v3)
+
+Average time = mean `request_time_ms` of the steps. Retries = sum of step `retries` (429, network, empty answers). Useful requests = steps / requests sent. Availability = runs not INDISPO / runs launched.
+
+| model | average time / request (s) | retries | useful requests | availability |
+|---|---|---|---|---|
+| gemini-3.5-flash | 22.1 | 0 | 3/13 | 0/2 |
+| gemini-3.5-flash-lite | 36.0 | 3 | 17/25 | 1/1 |
+| gemini-3.6-flash | 5.6 | 22 | 15/57 | 0/1 |
+| openai/gpt-oss-120b | 1.9 | 168 | 23/201 | 1/1 |
+| qwen/qwen3.8-27b | 1.0 | 100 | 14/114 | 1/1 |
+
+### Intermediary metrics (v3)
+
+First contact = first step whose code names a file of the final patch; first edit = first `edit_file` on that file. Discipline = iterations between the first passing `run_tests()` and `final_answer` (ideal 0; "?" when the test summary was truncated).
+
+| model | task | first contact | first edit | discipline |
+|---|---|---|---|---|
+| gemini-3.5-flash | sympy__sympy-13480 | - | - | - |
+| gemini-3.5-flash | sympy__sympy-14711 | - | - | - |
+| gemini-3.5-flash-lite | sympy__sympy-14711 | 3 | 16 | - |
+| gemini-3.6-flash | sympy__sympy-14711 | - | - | - |
+| openai/gpt-oss-120b | sympy__sympy-14711 | - | - | - |
+| qwen/qwen3.8-27b | sympy__sympy-14711 | 3 | 12 | 0 |
 <!-- AUTO:v3:END -->
 
-### Exam-style runs (2026-09-22)
-
-Run like the exam scripts: tasks drawn by the moulinette (`dump mbpp` at random, `select --seed 7`
-from the SWE-bench exam pool), agent started with `moulinette_eval run-agent <limit>`, then
-validated. Normal mode (model fallback enabled), first model `qwen/qwen3.8-27b`.
-
-| benchmark | task | verdict | iterations | tokens in | time (s) | models used |
-|---|---|---|---|---|---|---|
-| MBPP | 271, 259, 265, 395, 98 | **5 / 5 PASS** | 2-3 | 1346-2688 | < 2 | qwen3.8-27b |
-| SWE-bench | `pydata__xarray-4629` | PASS | 9 | 47917 | 208 | qwen, gpt-oss-120b/20b, flash-lite, gemma |
-| SWE-bench | `sympy__sympy-13480` | PASS | 4 | 8305 | 88 | qwen, gpt-oss-20b |
-| SWE-bench | `scikit-learn__scikit-learn-13439` | not run | - | - | - | MCP session did not start |
-
-SWE-bench: **2 / 3**. On `scikit-learn-13439` the image had just been pulled and the container
-started after the MCP client's 10 s session timeout, so the agent stopped before its first step.
-The `xarray` run shows the fallback chain at work: Groq rate limits pushed the task through five
-models, each receiving the full history plus a handover note, and the patch was still correct.
+v3 is a partial run: `pydata__xarray-4629` was not launched, `sympy__sympy-13480` only for the two
+`gemini-3.5-flash*` models, and the `gemini-3.5-flash-lite x sympy__sympy-13480` run was interrupted
+(empty `solution.json`, not counted). On `sympy__sympy-14711`, qwen is the only PASS and this time
+submitted by itself (discipline 0); gemini-3.5-flash-lite and gpt-oss-120b both hit the 900 s
+limit (FAIL).
 
 ## 3. Provider reliability
 
-- **Groq is fast but rate-limited per minute.** Requests take 0.5 to 1.2 s, but in v3 only
-  32 / 216 (qwen) and 33 / 268 (gpt-oss-120b) requests produced a step: the rest were 429
-  answers absorbed by key rotation and waits. Its 413 errors (tokens-per-minute limit of 7000
-  on qwen) are now handled by shrinking the history, then switching model.
-- **Gemini is slower and limited per day.** Requests take 3.5 to 20 s. `gemini-3.5-flash` and
-  `gemini-3.6-flash` were unavailable in 6 of 6 v3 runs: the error is
+- **Groq is fast but rate-limited per minute.** Requests take 0.5 to 1.9 s, but in v2 only
+  32 / 216 (qwen) and 33 / 268 (gpt-oss-120b) requests produced a step, and in v3 14 / 114 and
+  23 / 201: the rest were 429 answers absorbed by key rotation and waits. Its 413 errors
+  (tokens-per-minute limit of 7000 on qwen) are now handled by shrinking the history, then
+  switching model; no 413 appeared in v3.
+- **Gemini is slower and limited per day.** Requests take 3.5 to 36 s. `gemini-3.5-flash` and
+  `gemini-3.6-flash` were unavailable in 6 of 6 v2 runs: the error is
   `GenerateRequestsPerDayPerProjectPerModel-FreeTier` on all five keys, because the keys belong to
   the same Google project and therefore share one daily quota. Waiting cannot fix a daily quota.
-- **`gemini-3.5-flash-lite`** is the most available Gemini model (2 / 3 runs completed in v1 and v3).
-- **Mistral** answered every call during the checks and completed 17 of 30 steps of an exam-style
-  run on `django__django-15741` after all Groq and Gemini models had failed (validated PASS).
+  In v3 they were again unavailable in 3 of 3 runs: `gemini-3.5-flash` answered 503 (overload)
+  after at most 3 steps, and `gemini-3.6-flash` reached step 15 before 429 answers exhausted all
+  five keys and the three 20 s waits.
+- **`gemini-3.5-flash-lite`** is the most available Gemini model (2 / 3 runs completed in v1 and
+  v2, 1 / 1 in v3), but in v3 its requests averaged 36 s, so its run hit the 900 s limit after
+  only 17 iterations.
 
 Key rotation works (keys are cycled on 429 and reset on every model switch), but it only adds
 capacity when keys come from different projects or accounts.
 
 ## 4. Intermediary metrics
 
-- **First contact** with a file of the final patch is early for qwen (step 1 to 3): the prompt's
-  "search, then read" method works. gpt-oss-120b needed 7 steps on `sympy-14711`.
+- **First contact** with a file of the final patch is early for qwen (step 1 to 3, step 3 again
+  in v3): the prompt's "search, then read" method works. gpt-oss-120b needed 7 steps on
+  `sympy-14711` in v2; in v3 it produced an empty patch after 23 iterations, so it has no first
+  contact.
 - **First edit** varies much more (step 2 to 20): on `sympy-14711` both qwen and gpt-oss-120b
-  spent many steps reading and testing before editing.
+  spent many steps reading and testing before editing. In v3 qwen edited at step 12 (20 in v2)
+  and gemini-3.5-flash-lite at step 16.
 - **Discipline** (iterations between the first passing `run_tests()` and `final_answer`) is only
-  measurable where the agent submitted by itself. qwen scored the ideal **0** on `xarray-4629`.
+  measurable where the agent submitted by itself. qwen scored the ideal **0** on `xarray-4629`
+  (v2) and on `sympy-14711` (v3), a task where it had not submitted in v1 or v2.
   Most other runs never called `final_answer` and hit the iteration or token limit even though the
   patch was already correct; this is why a last-call warning was added (the model is told when
   2 iterations or 20 % of the input budget remain).
@@ -227,23 +263,43 @@ from the moulinette), same models, only the system prompt changes. Runs are in
   and fewer output tokens, for ~270 more input tokens per task (the longer prompt is re-sent at
   every request), well within the 6000-token MBPP budget.
 
-v1 vs v3 is not a clean ablation (several changes at once), but it shows the effect of waiting on
+v1 vs v2 is not a clean ablation (several changes at once), but it shows the effect of waiting on
 the same model instead of aborting on the first 429 / 503: qwen stayed at 3/3 and submitted one
 more task by itself (`xarray-4629`, discipline 0).
 
+v2 vs v3 is not a clean ablation either, and v3 only covers `sympy-14711` for every model, so it
+can only be compared on that task. The prompt ablation above was not re-run for v3.
+
+| model | v2 on `sympy-14711` | v3 on `sympy-14711` |
+|---|---|---|
+| qwen/qwen3.8-27b | PASS, no `final_answer`, 23 iterations, 749 s | PASS, `final_answer`, 14 iterations, 438 s |
+| openai/gpt-oss-120b | PASS, 28 iterations, 888 s | FAIL (empty patch), 23 iterations, 888 s |
+| gemini-3.5-flash-lite | FAIL, 23 iterations, 211 s | FAIL, 17 iterations, 888 s |
+
+qwen improved on every measure and submitted by itself (discipline 0). The two other models
+failed at the 900 s limit, so their v3 result reflects slow or rate-limited requests (36 s per
+request for flash-lite, 168 retries for gpt-oss-120b) more than the agent itself.
+
 ## 6. Conclusions
 
-- **Kept as first choice: `qwen/qwen3.8-27b`** - 6 / 6 PASS over v1 and v3, fast, early first
-  contact. It is first in `AUTHORIZED_LLM`, the fallback order.
-- **Kept as second choice: `openai/gpt-oss-120b`** - solves tasks (PASS on `sympy-14711`), but
+- **Kept as first choice: `qwen/qwen3.8-27b`** - 7 / 7 PASS over v1, v2 and v3, fast, early first
+  contact. In v3 it solved `sympy-14711` in 14 iterations instead of 23 (v2) and called
+  `final_answer` by itself (discipline 0), the only model to do so on this task. It is first in
+  `AUTHORIZED_LLM`, the fallback order.
+- **Kept as second choice: `openai/gpt-oss-120b`** - solves tasks, but not reliably: PASS on
+  `sympy-14711` in v2 after 888 s, FAIL on the same task in v3 when it hit the 900 s limit. It
   often answers with native tool calls that Groq rejects; `rejected_generation` recovers them as
-  `<tool_call>` blocks. Heavily rate-limited (210 retries in v3).
-- **Kept as fallback: `gemini-3.5-flash-lite`** - most available Gemini model, 3 PASS / 1 FAIL
-  over the runs it completed, but slow and prone to filling the input budget.
+  `<tool_call>` blocks. Heavily rate-limited (210 retries in v2, 168 in v3).
+- **Kept as fallback: `gemini-3.5-flash-lite`** - most available Gemini model, 3 PASS / 2 FAIL
+  over the runs it completed (v1 to v3), but slow (36 s / request in v3, FAIL on `sympy-14711`
+  at the 900 s limit) and prone to filling the input budget.
 - **Not usable in practice today: `gemini-3.5-flash`, `gemini-3.6-flash`** - no completed run in
-  v3 because the shared daily quota is always exhausted. They stay in the fallback list, after
-  Groq, in case the quota is available.
-- **Mistral `codestral-2508`** is a strong last resort: 5/5 on MBPP with the explicit prompt and
-  it rescued an exam-style SWE-bench run.
+  v2 or v3: the shared daily quota is exhausted in v2 (429), and in v3 `gemini-3.6-flash` ran
+  out of keys on 429 answers and `gemini-3.5-flash` answered 503 (overload). They stay in the
+  fallback list, after Groq, in case the quota is available.
+- **Mistral `codestral-2508`** is a strong last resort: 5/5 on MBPP with the explicit prompt
+  (section 5). It is not in the SWE-bench grid, so it comes after the Groq and Gemini models in
+  the fallback order.
 - **Main lever left:** API keys from separate projects/accounts (to multiply quotas), since most
-  failed cells are INDISPO, not FAIL.
+  failed cells are INDISPO, not FAIL. v3 also shows a second limit: the two FAIL cells are
+  900 s timeouts, so the time budget now matters as much as the quota for the slower models.
