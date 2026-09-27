@@ -6,7 +6,7 @@ MODEL ?= qwen/qwen3.8-27b
 install:
 	uv sync
 	test -f .env || cp .env.example .env
-	echo "Please edit .env file to add your API keys."
+	@echo "Please edit .env file to add your API keys."
 
 run:
 	uv run -m src

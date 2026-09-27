@@ -44,16 +44,17 @@ The project is split into two independent halves behind one interface contract:
 ### Install
 
 ```bash
-make install        # uv sync, then writes .env with empty keys (overwrites an existing one)
+make install        # uv sync, then copies .env.example to .env if .env does not exist yet
 ```
 
 or manually:
 
 ```bash
 uv sync
+cp .env.example .env
 ```
 
-then create a `.env` at the repository root:
+`.env` at the repository root holds:
 
 ```bash
 GROQ_API_KEY=
@@ -62,8 +63,10 @@ MISTRAL_API_KEY=
 TESTBED_PATH=
 ```
 
-Fill in `.env` with your LLM provider API key(s) (see [Agent Loop](#agent-loop)
-below for which environment variables are read).
+Fill in your LLM provider API key(s) (see [Agent Loop](#agent-loop) below for which
+environment variables are read). Leave `TESTBED_PATH` empty for the agents: it is the
+repository path **inside the SWE-bench container** and defaults to `/testbed` (see
+[`TESTBED_PATH`](#testbed_path)).
 
 ### Run the sandbox on its own (no LLM)
 
@@ -72,6 +75,8 @@ uv run sandbox                                              # bare REPL, no MCP 
 uv run sandbox sandbox_template.json                        # with a config file
 uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py"       # connect an MCP server over stdio
 uv run sandbox --mcp-server http://localhost:8080/mcp       # connect one over HTTP
+TESTBED_PATH=/path/to/repo uv run sandbox --mcp-stdio "python mcp_tools_swebench.py"
+                                                            # SWE-bench tools on a local checkout
 ```
 
 Each line typed is executed and remembered across the session (variables persist,
@@ -81,13 +86,19 @@ the same way the agent's code blocks do). `exit` or Ctrl+D to leave.
 
 ```bash
 uv run python mcp_tools_mbpp.py --task-file cache/mbpp_task.json
-uv run python mcp_tools_swebench.py --task-file cache/swebench_task.json
+TESTBED_PATH=/testbed uv run python mcp_tools_swebench.py --task-file cache/swebench_task.json
+TESTBED_PATH=/path/to/repo uv run python mcp_tools_swebench.py     # isolation mode, no task
 ```
 
 Both support `--http --host --port` for streamable HTTP instead of stdio. The
-SWE-bench server additionally needs a **`TESTBED_PATH`** environment variable set
-to the repository root before it starts (a `TESTBED_PATH=` line in `.env`) — the moulinette sets
-this itself when testing the tools in isolation.
+SWE-bench server reads the repository location from the **`TESTBED_PATH`**
+environment variable and has two modes:
+
+- **with `--task-file`**: it starts the task's Docker image and runs every tool inside
+  that container, where the repository is at `TESTBED_PATH` (`/testbed`);
+- **without a task**: it runs the tools directly on the host checkout at
+  `TESTBED_PATH` — the way the moulinette tests the tools in isolation (subject V.4).
+  `run_tests()` then answers that there is no `eval_script` to run.
 
 ### Run the agent loop
 
@@ -96,11 +107,14 @@ share (argument parsing, task loading, first prompt, configuration) are in `agen
 
 ```bash
 uv run python -m agent_mbpp --task-file cache/mbpp_task.json --output solution.json \
-    --model-name qwen/qwen3.8-27b [--provider-url https://.../chat/completions]
+    --model-name qwen/qwen3.8-27b [--provider-url https://api.groq.com/openai/v1]
 uv run python -m agent_swebench --task-file cache/swebench_task.json --output solution.json \
     --model-name qwen/qwen3.8-27b
 make run_mbpp / make run_sw-bench           # same, with the files of cache/
 ```
+
+`--provider-url` takes the provider's base URL, as in the subject (`/chat/completions` is
+appended when it is missing); a full `.../chat/completions` URL works too.
 
 By default each CLI starts its own MCP server over stdio (`mcp_tools_mbpp.py` or
 `mcp_tools_swebench.py`, with `--task-file`). Another server can be used instead:
@@ -149,12 +163,13 @@ harness (not part of this repository) and invoked as:
 
 ### AI usage
 
-On the **execution side (bclairot)**, AI was used as a search engine for documentation and code examples. 
-It also helped me to test a lot, understanding the requirements, the constraints and  to be sure nothing 
-was forgotten for the mandatory tasks of the project. Also generated a first draft of the README.md file, 
-which was then improved and completed by me.
+On the **execution side (bclairot)**, an AI coding assistant was used to explain
+concepts (MCP, an asyncio loop running in a thread, `multiprocessing` IPC, Docker exec) from which
+the core of the sandbox, the MCP client and the tool servers was written by hand; to write the
+docstrings; and, after a review of the project against the subject.
+It also drafted this README. Every change was reviewed and committed by bclairot.
 
-On the **agent side (mobenais)**, an AI coding assistant (Claude Code) was used to review and
+On the **agent side (mobenais)**, an AI coding assistant was used to review and
 refactor code (extraction, shared CLI helpers, English naming, flake8), to check
 which free-tier models answer with real API calls, to write the benchmark scripts and simulations
 of provider failures, and to draft the benchmark report from the measured data.
@@ -169,7 +184,7 @@ subgraph group_agent["Agent and benchmarks"]
   node_swe_cli["SWE-bench CLI<br/>[__main__.py]"]
   node_shared_cli["CLI and task helpers<br/>[__init__.py]"]
   node_mbpp_input["MBPP task schema<br/>[mbpp_task_Input.py]"]
-  node_swe_input["SWE-bench task schema"]
+  node_swe_input["SWE-bench task schema<br/>[swe_bench_task_input.py]"]
   node_agent_loop["Thought-code loop<br/>[agent_loop.py]"]
   node_solution["Solution output schema<br/>[solution_output.py]"]
 end
@@ -191,8 +206,9 @@ end
 
 subgraph group_execution["Benchmark execution"]
   node_mbpp_server["MBPP tool server<br/>[mcp_tools_mbpp.py]"]
-  node_swe_server["SWE-bench tool server"]
+  node_swe_server["SWE-bench tool server<br/>[mcp_tools_swebench.py]"]
   node_docker_manager["Task repository container<br/>[docker_manager.py]"]
+  node_local_manager["Host repository runner<br/>[local_manager.py]"]
 end
 
 node_user(("Benchmark operator"))
@@ -211,7 +227,8 @@ node_mbpp_cli -->|"runs loop"| node_agent_loop
 node_swe_cli -->|"runs loop"| node_agent_loop
 node_shared_cli -->|"configures model"| node_llm_registry
 node_llm_registry -->|"creates provider"| node_llm_provider
-node_llm_provider -->|"rotates keys"| node_llm_rotator
+node_agent_loop -->|"rotates keys on 429"| node_llm_rotator
+node_llm_rotator -->|"sets active key"| node_llm_provider
 node_llm_provider -->|"sends completion"| node_llm_service
 node_llm_service -->|"returns completion"| node_llm_provider
 node_agent_loop -->|"requests completion"| node_llm_provider
@@ -223,9 +240,11 @@ node_mcp_bridge -->|"dispatches requests"| node_sync_client
 node_sync_client -->|"drives async calls"| node_mcp_client
 node_mcp_client -->|"connects MCP"| node_mbpp_server
 node_mcp_client -->|"connects MCP"| node_swe_server
-node_swe_server -->|"runs repository tools"| node_docker_manager
+node_swe_server -->|"with a task"| node_docker_manager
+node_swe_server -->|"without a task"| node_local_manager
 node_docker_manager -->|"manages container"| node_docker
 node_docker -->|"hosts task checkout"| node_task_repo
+node_local_manager -->|"runs on TESTBED_PATH"| node_task_repo
 node_mbpp_cli -->|"builds result"| node_solution
 node_swe_cli -->|"builds result"| node_solution
 node_shared_cli -->|"writes JSON"| node_result_file
@@ -249,6 +268,7 @@ click node_mcp_client "https://github.com/naitchi/agent-smith/blob/main/src/mcp_
 click node_mbpp_server "https://github.com/naitchi/agent-smith/blob/main/mcp_tools_mbpp.py"
 click node_swe_server "https://github.com/naitchi/agent-smith/blob/main/mcp_tools_swebench.py"
 click node_docker_manager "https://github.com/naitchi/agent-smith/blob/main/src/docker_manager.py"
+click node_local_manager "https://github.com/naitchi/agent-smith/blob/main/src/local_manager.py"
 
 classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a
 classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
@@ -260,7 +280,7 @@ classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
 class node_mbpp_cli,node_swe_cli,node_shared_cli,node_mbpp_input,node_swe_input,node_agent_loop,node_solution toneBlue
 class node_llm_registry,node_llm_provider,node_llm_rotator,node_task_repo toneAmber
 class node_sandbox,node_namespace,node_security,node_mcp_bridge,node_sync_client,node_mcp_client toneMint
-class node_mbpp_server,node_swe_server,node_docker_manager toneRose
+class node_mbpp_server,node_swe_server,node_docker_manager,node_local_manager toneRose
 class node_user,node_llm_service,node_docker,node_result_file toneIndigo
 ```
 *Mermaid diagram done with [GitDiagram](https://gitdiagram.com)*
@@ -338,21 +358,40 @@ required):
 - **Imports** — `_restricted_import` (`security.py`) replaces `__import__` with an
   allowlist check (`SandboxConfig.authorized_imports`, supporting `"pkg.*"`
   wildcards), and strips unauthorized submodules pulled in via `from x import y`.
-- **Filesystem** — `_restricted_open` wraps `open()`: resolves the path with
-  `os.path.realpath` *before* comparing it against `allowed_directories`, so a
-  traversal like `/testbed/../etc/passwd` can't escape the allowlist.
+- **Filesystem** — `_restricted_open` wraps `open()`: normalizes `str`/`bytes`
+  paths and resolves them with `os.path.realpath` *before* comparing them against
+  `allowed_directories`, so a traversal like `/testbed/../etc/passwd` can't escape
+  the allowlist.
 - **Network** — `socket.socket` is replaced with a call that always raises, inside
   the worker process only.
 - **Builtins** — the child's namespace only exposes an explicit allowlist of
   builtins (`namespace.py`); dangerous ones (`eval`, `exec`, `compile`, `open`,
   `__import__`, `input`, `breakpoint`, `globals`, `help`) are removed or
-  overridden, and attribute-based sandbox escapes (e.g.
-  `().__class__.__bases__[0].__subclasses__()`) are rejected at parse time.
+  overridden.
+- **Attributes, checked at parse time** — the code is parsed with `ast` before
+  anything runs and rejected if it touches a dunder attribute (the classic
+  `().__class__.__bases__[0].__subclasses__()` route) or a frame/code attribute
+  (`gi_frame`, `f_back`, `f_globals`, `f_builtins`, `tb_frame`, ...). Walking frames
+  out of the `exec` frame is the other classic escape: it reaches the sandbox's own
+  frames, whose builtins are the real, unrestricted ones.
+- **Audit hook, the backstop** — the checks above work on names, but an authorized
+  module can still hand out a dangerous one as a plain attribute (`typing.sys`, for
+  instance, is the real `sys`). So right before the code runs, the worker installs a
+  `sys.addaudithook` hook, which cannot be removed afterwards. It sees what the
+  interpreter actually does, whatever object the code reached: every `open` (also
+  `os.open`, `pathlib`) must stay inside `allowed_directories` (plus the Python
+  install, so authorized modules can still be imported), and network
+  (`socket.connect`/`bind`/`getaddrinfo`), process spawning (`os.system`,
+  `subprocess.Popen`, `os.exec*`, `os.posix_spawn`) and `ctypes` events are refused.
 - **Timeout / memory** — enforced by the parent (`p.join(timeout=...)`, then
   `terminate()`/`kill()`) and by `resource.setrlimit(RLIMIT_AS, ...)` inside the
   child, respectively.
-- `KeyboardInterrupt`/`SystemExit` are always re-raised, never swallowed by the
-  generic error handler.
+- **`KeyboardInterrupt`/`SystemExit`** — the worker only catches `Exception`, never
+  these two. A real Ctrl+C reaches the parent directly (same process group): the
+  agent loop saves a backup and stops, and the CLI still closes the sandbox and the
+  MCP server. If generated code raises one itself, only the worker dies and the
+  observation reports that the sandbox process died, so the model cannot shut the
+  agent down.
 
 **`final_answer(value)`** is injected into every sandbox namespace regardless of
 which MCP server is connected — it is *not* an MCP tool. It works by raising an
@@ -383,19 +422,33 @@ failing assertion plus captured stdout/stderr, truncated with an explicit notice
 past `max_std_length`. A `check_syntax(code)` tool is included as an extra, so the
 agent can catch a `SyntaxError` before spending an iteration on a failed test run.
 
-### SWE-bench (`mcp_tools_swebench.py` + `src/docker_manager.py`)
+### SWE-bench (`mcp_tools_swebench.py` + `src/docker_manager.py` / `src/local_manager.py`)
 
-All 9 mandatory tools, backed by one long-lived Docker container per server
-instance (`DockerManager`, `containers.run(image, command="tail -f /dev/null",
-detach=True)`), so state — file edits, git history — persists across the whole
-task the same way it would inside a real terminal session:
+All 9 mandatory tools run against the repository through one of two backends with
+the same interface (`exec`, `replace_file`, `workdir`, `cleanup`), so the tools
+themselves don't know which one is behind them:
+
+- **`DockerManager`** (a task is given): one long-lived container per server
+  instance, started from the task's `docker_image`
+  (`containers.run(image, command="tail -f /dev/null", detach=True, init=True)`),
+  so state — file edits, git history — persists across the whole task the same way
+  it would inside a real terminal session.
+- **`LocalManager`** (no task): the commands run with `subprocess` directly on the
+  host checkout at `TESTBED_PATH`. This is the mode the moulinette uses to test the
+  tools in isolation; `run_tests()` then returns an explicit message, since there is
+  no `eval_script`.
+
+The tools:
 
 - **Filesystem**: `read_file`/`edit_file`/`list_files`. `read_file` mirrors
   `cat -n`. `edit_file` requires `old_str` to occur in the file exactly once
   (counted in Python on the raw file content, not a regex substitution), and
-  writes back via `container.put_archive` (a tar archive over the Docker API) —
-  not a shell command — since arbitrary source code routinely contains characters
-  that break naive shell quoting.
+  writes back through the backend's `replace_file` — `container.put_archive` (a tar
+  archive over the Docker API) or a plain file write on the host — not a shell
+  command, since arbitrary source code routinely contains characters that break
+  naive shell quoting. When the edited file is Python and no longer
+  parses, the edit is kept but the answer says so, with the error and its line
+  (subject V.1: an edit that introduced a syntax error must be reported).
 - **Search**: `search_code`/`search_function_or_class_definition_in_code`/
   `find_references`, all `grep`-based, run from the repository root so paths come
   out absolute, exclude `.git/` and binary files, and reformat grep's
@@ -407,24 +460,34 @@ task the same way it would inside a real terminal session:
   `git -c core.fileMode=false diff` (the `-c core.fileMode=false` avoids
   Docker-induced file-permission noise polluting the diff); `run_command(command,
   workdir)` returns stdout, stderr and exit code together.
-- Every command inside the container runs as
-  `timeout {N}s bash -c "<command>"` — a relative `workdir` (including the
-  implicit default) is resolved against the repository root before being sent to
-  Docker, which otherwise rejects a relative working directory outright.
+- Every command runs as `timeout {N}s bash -c "<command>"` — a relative `workdir`
+  (including the implicit default) is resolved against the repository root before
+  being sent to Docker, which otherwise rejects a relative working directory
+  outright.
+- Every argument that ends up in a shell command (file paths, directories, search
+  patterns, symbol names) goes through `shlex.quote`, so a pattern such as `it's`
+  or `x; rm -rf /` is searched for literally instead of breaking or extending the
+  command. `run_command` is the only tool whose argument is meant to be a shell
+  command.
 - The repository root itself is read from the **`TESTBED_PATH`** environment
   variable (set by the moulinette before the server starts, per the subject), not
   guessed from the Docker image.
-- `cleanup()` (stop + remove the container) is wired to `SIGTERM`/`SIGINT` so it
-  still runs if the evaluator force-kills the process on timeout, not just on a
-  clean exit.
+- `cleanup()` removes the container with `remove(force=True)`: one fast API call
+  that kills and removes it together. A graceful `stop()` would wait ~10 s, because
+  `tail` running as PID 1 ignores `SIGTERM`. When the MCP client closes, the SDK
+  leaves the server about 2 s before `SIGTERM` and 2 s more before `SIGKILL`, so a
+  `stop()` followed by `remove()` would be killed half-way, leaving a stopped
+  container behind. `cleanup()` is idempotent and wired to `SIGTERM`/`SIGINT`, so it
+  runs on a clean exit, on the client's shutdown and when the evaluator force-kills
+  the process on timeout.
 
 #### `TESTBED_PATH`
 
-`TESTBED_PATH` is the absolute path of the repository **inside the container**
-(`/testbed` in every SWE-bench image). It is unrelated to `--mcp-server`, which is
-only the transport used to reach the tool server; by default neither CLI uses a URL
-at all, since both start their server over stdio. What `TESTBED_PATH` actually
-drives, in `DockerManager`:
+`TESTBED_PATH` is the absolute path of the repository: **inside the container**
+(`/testbed` in every SWE-bench image) when the server has a task, or **on the host**
+in isolation mode. It is unrelated to `--mcp-server`, which is only the transport used
+to reach the tool server; by default neither CLI uses a URL at all, since both start
+their server over stdio. What `TESTBED_PATH` actually drives, in both backends:
 
 - it is the default working directory of every command run in the container, so
   `run_tests()` and `run_command("pytest ...")` start at the repository root rather
@@ -434,21 +497,23 @@ drives, in `DockerManager`:
 - a relative file path is resolved against it too, which is what lets the agent write
   `read_file("xarray/core/merge.py")` instead of the full absolute path.
 
-**It does not cross the stdio boundary on its own.** `mcp.stdio_client` passes the
-child process only a fixed allowlist of variables — `HOME`, `LOGNAME`, `PATH`,
-`SHELL`, `TERM`, `USER` on POSIX (`DEFAULT_INHERITED_ENV_VARS`) — and
-`MCPClient.build_client()` does not pass an `env=` of its own to
-`StdioServerParameters`. Launching `mcp_tools_swebench.py` through `--mcp-stdio`
-therefore fails with `no environment variable TESTBED_PATH set`, even when the
-variable is exported in the parent shell. `agent_swebench` works around this by
-re-injecting it into the command it builds:
+**Crossing the stdio boundary.** By default `mcp.stdio_client` passes the child
+process only a fixed allowlist of variables — `HOME`, `LOGNAME`, `PATH`, `SHELL`,
+`TERM`, `USER` on POSIX (`DEFAULT_INHERITED_ENV_VARS`) — which would drop
+`TESTBED_PATH`. `MCPClient.build_client()` therefore passes the whole environment
+(`env=dict(os.environ)`) to `StdioServerParameters`, so exporting `TESTBED_PATH` in
+the shell is enough for `uv run sandbox --mcp-stdio "python mcp_tools_swebench.py"`.
+
+`agent_swebench` also sets it explicitly in the command it builds, from the
+environment or `/testbed` by default:
 
 ```bash
 env TESTBED_PATH=/testbed python mcp_tools_swebench.py --task-file <task>.json
 ```
 
-so the variable is set by the shell that starts the server rather than inherited.
-A server started directly, or over HTTP, just reads it from its own environment.
+The value in the command takes precedence over the inherited one, so the agent works
+whether the variable is exported, empty in `.env`, or absent. A server started
+directly, or over HTTP, just reads it from its own environment.
 
 ## Benchmark Results and Analysis
 
@@ -458,9 +523,12 @@ their `solution.json` in `BENCHMARK/`.
 - **Grid:** 5 free-tier models (qwen3.8-27b and gpt-oss-120b on Groq; gemini-3.5-flash,
   3.5-flash-lite and 3.6-flash on Google AI Studio) x 3 SWE-bench Verified tasks
   (`sympy-14711`, `sympy-13480`, `pydata__xarray-4629`), one model per run, validated with the
-  moulinette.
-- **Best model:** `qwen/qwen3.8-27b`, 6 / 6 PASS across both benchmark versions, fast and quick to
-  find the right file; it is first in the fallback order.
+  moulinette. Only 3 of the 5 models have real data: `gemini-3.5-flash` and `3.6-flash` never
+  finished a run (quota), and are kept in the tables to document that.
+- **Best model:** `qwen/qwen3.8-27b`, 7 / 7 PASS over v1, v2 and v3, fast and quick to find the
+  right file; it is first in the fallback order.
+- **Coverage:** these 3 tasks are 3 of the 6 in the exam pool; the other 3 are planned for v4
+  (see the report).
 - **Main limit is quota, not reasoning:** most failed cells are "provider unavailable". Groq is
   limited per minute (hundreds of 429 absorbed by key rotation and waits); Gemini keys of one
   project share a daily quota that `gemini-3.5-flash` and `3.6-flash` always exhausted.
