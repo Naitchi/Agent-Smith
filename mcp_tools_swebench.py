@@ -30,7 +30,7 @@ class MCPServerSWEBench:
     def __init__(
         self,
         task: SWEBenchTaskInput | None = None,
-        timeout: int = 30,
+        timeout: int = 240,
         max_std_length: int = 10000,
     ):
         """Build the MCP server, start its repository backend, register tools.
