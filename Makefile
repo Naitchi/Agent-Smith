@@ -21,7 +21,7 @@ run_mbpp:
 run_sw-bench:
 	uv run python -m agent_swebench --task-file $(SWE_TASK) --output $(OUT) $(if $(MODEL),--model-name $(MODEL))
 
-clean:
+clean: 
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name "backup_memory" -exec rm -rf {} + 
 
