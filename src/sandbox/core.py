@@ -276,6 +276,12 @@ class Sandbox(
             )
             namespace["get_prompt"] = make_mcp_proxy(self.proxy_get_prompt)
 
+        out_queue: Any
+        for out_queue in (queue, tool_requests):
+            if out_queue._thread is None:
+                out_queue._start_thread()
+        self._disable_threads()
+
         start = time.monotonic()
         result = ExecutionResult()
         with redirect_stdout(temp_stdout), redirect_stderr(temp_stderr):

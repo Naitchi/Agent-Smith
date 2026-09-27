@@ -6,10 +6,12 @@ inside the worker process, on the LLM-generated code it's asked to execute.
 
 from __future__ import annotations
 
+import _thread
 import ast
 import builtins
 import os
 import sys
+import threading
 import types
 from collections.abc import Callable
 from typing import IO, Any
@@ -41,6 +43,20 @@ DISALLOWED_ATTRS = frozenset(
     }
 )
 
+DISALLOWED_MODULES = frozenset(
+    {
+        "threading",
+        "_thread",
+        "multiprocessing",
+        "_multiprocessing",
+        "concurrent",
+        "subprocess",
+        "_posixsubprocess",
+        "asyncio",
+        "pty",
+    }
+)
+
 BLOCKED_AUDIT_EVENTS = frozenset(
     {
         "socket.connect",
@@ -52,7 +68,11 @@ BLOCKED_AUDIT_EVENTS = frozenset(
         "os.exec",
         "os.spawn",
         "os.posix_spawn",
+        "os.fork",
+        "os.forkpty",
         "subprocess.Popen",
+        "_thread.start_new_thread",
+        "_thread.start_joinable_thread",
         "ctypes.dlopen",
         "ctypes.dlsym",
         "ctypes.dlsym/handle",
@@ -104,9 +124,16 @@ class SandboxSecurityMixin:
         Raises:
             ImportError: If `name` (or, for a dotted name, its top-level
                 package) isn't in `config.authorized_imports` — a
-                ``"pkg.*"`` entry authorizes `pkg`'s submodules too — or if
-                any name in `fromlist` resolves to an unauthorized submodule.
+                ``"pkg.*"`` entry authorizes `pkg`'s submodules too — if its
+                top-level package is in `DISALLOWED_MODULES` (regardless of
+                the config), or if any name in `fromlist` resolves to an
+                unauthorized submodule.
         """
+        if name.split(".")[0] in DISALLOWED_MODULES:
+            raise ImportError(
+                f"Error: Import of module '{name}' is disabled in the sandbox."
+                "Because any thread in the sandbox would break it."
+            )
         if "." in name:
             if f"{name.split('.')[0]}.*" not in self.config.authorized_imports:
                 raise ImportError(
@@ -222,10 +249,12 @@ class SandboxSecurityMixin:
         Called once inside the worker process, right before the untrusted
         code runs. Enforces the filesystem allowlist on every `open` (not
         just the `open` builtin, so `os.open`/`pathlib` are covered too) and
-        blocks the network, process-spawn and `ctypes` audit events in
-        `BLOCKED_AUDIT_EVENTS`. Because an audit hook cannot be removed, this
-        holds for the rest of the worker's life — which is fine, the worker
-        only serializes its namespace and exits afterwards.
+        blocks the network, process-spawn, fork, thread-start and `ctypes`
+        audit events in `BLOCKED_AUDIT_EVENTS`. Because an audit hook cannot
+        be removed, this holds for the rest of the worker's life — which is
+        fine, the worker only serializes its namespace and exits afterwards,
+        as long as any thread it needs (the `multiprocessing.Queue` feeders)
+        is started before this is called.
         """
         allowed = tuple(self.config.allowed_directories) + PYTHON_PREFIXES
 
@@ -299,3 +328,40 @@ class SandboxSecurityMixin:
         raise PermissionError(
             "Error: Network access is disabled in the sandbox."
         )
+
+    @staticmethod
+    def _blocked_thread(*args: Any, **kwargs: Any) -> None:
+        """Stand-in for `_thread`'s thread-start functions in the worker.
+
+        Args:
+            *args: Ignored.
+            **kwargs: Ignored.
+
+        Raises:
+            PermissionError: Always — this is what makes thread creation
+                unavailable to sandboxed code.
+        """
+        raise PermissionError(
+            "Error: Thread creation is disabled in the sandbox."
+        )
+
+    def _disable_threads(self) -> None:
+        """Replace every thread-start entry point with `_blocked_thread`.
+
+        Called inside the worker right before the untrusted code runs, once
+        the `multiprocessing.Queue` feeder threads are started. Python 3.10
+        raises no audit event on thread creation, so this is what actually
+        blocks threads — even through a module that re-exports `threading`
+        as a plain attribute (e.g. ``logging.threading``), which the import
+        allowlist can't see.
+        """
+        for module in (_thread, threading):
+            for attr in (
+                "start_new_thread",
+                "start_new",
+                "_start_new_thread",
+                "start_joinable_thread",
+                "_start_joinable_thread",
+            ):
+                if hasattr(module, attr):
+                    setattr(module, attr, self._blocked_thread)
