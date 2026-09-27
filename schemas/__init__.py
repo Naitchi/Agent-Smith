@@ -1,6 +1,6 @@
 """Shared data models, contracts, prompts and agent settings."""
 
-from .Error import (
+from .error import (
     AgentLoopError,
     BudgetExceededError,
     ConsecutiveErrorsError,

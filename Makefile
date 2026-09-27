@@ -5,11 +5,31 @@ MODEL ?= qwen/qwen3.8-27b
 
 install:
 	uv sync
+	make banner
 	test -f .env || cp .env.example .env
 	@echo "Please edit .env file to add your API keys."
 
+
+
+banner:
+	@printf '\033[1;38;5;118m%s\033[0m\n' ' █████╗  ██████╗ ███████╗███╗   ██╗████████╗    ███████╗███╗   ███╗██╗████████╗██╗  ██╗'
+	@printf '\033[1;38;5;82m%s\033[0m\n' '██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝    ██╔════╝████╗ ████║██║╚══██╔══╝██║  ██║'
+	@printf '\033[1;38;5;46m%s\033[0m\n' '███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║       ███████╗██╔████╔██║██║   ██║   ███████║'
+	@printf '\033[1;38;5;40m%s\033[0m\n' '██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║       ╚════██║██║╚██╔╝██║██║   ██║   ██╔══██║'
+	@printf '\033[1;38;5;34m%s\033[0m\n' '██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║       ███████║██║ ╚═╝ ██║██║   ██║   ██║  ██║'
+	@printf '\033[1;38;5;28m%s\033[0m\n' '╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝       ╚══════╝╚═╝     ╚═╝╚═╝   ╚═╝   ╚═╝  ╚═╝'
+
 run:
-	uv run -m src
+	clear
+	make banner
+	@read -p "Enter your benchmark category (0 = mbpp, 1 = swe): " bench; \
+	if [ "$$bench" = 0 ]; then \
+		uv run python -m agent_mbpp --task-file $(TASK) --output $(OUT) $(if $(MODEL),--model-name $(MODEL)); \
+	else \
+		uv run python -m agent_swebench --task-file $(SWE_TASK) --output $(OUT) $(if $(MODEL),--model-name $(MODEL)); \
+	fi
+
+
 
 solution:
 	uv run python -m moulinette dump mbpp --task-id 3 --output task.json

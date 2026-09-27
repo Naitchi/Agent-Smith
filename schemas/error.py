@@ -62,7 +62,7 @@ class MaxIterationsError(AgentLoopError):
         message = ("max_iterations reached without final_answer "
                    f"({max_iterations})")
         if last_error is not None:
-            message += f", derniere erreur -> {last_error}"
+            message += f", last error -> {last_error}"
         super().__init__(message)
 
 
@@ -74,5 +74,5 @@ class ConsecutiveErrorsError(AgentLoopError):
         self.last_error = last_error
         message = f"{count} erreurs consecutives"
         if last_error is not None:
-            message += f", derniere -> {last_error}"
+            message += f", last one -> {last_error}"
         super().__init__(message)
