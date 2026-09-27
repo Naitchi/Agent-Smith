@@ -12,8 +12,14 @@
 | `gemini-3.5-flash-lite` | Google AI Studio | cheapest Gemini, highest free quota |
 | `gemini-3.6-flash` | Google AI Studio | most recent Gemini available when the benchmark started |
 
+Only 3 of these 5 models have real SWE-bench data: `gemini-3.5-flash` and `gemini-3.6-flash`
+never finished a run in v1, v2 or v3 (every cell is INDISPO, see section 3). They are kept in the
+tables to document that, not as measured models.
+
 Mistral (`codestral-2508`, `ministral-*`) was added to the fallback list later and is used in the
-prompt ablation (section 5), but not in the 5 x 3 grid below.
+prompt ablation (section 5). `codestral-2508` has its own Mistral quota, independent of Groq and
+Google, so it is the model to add to the SWE-bench grid to get a fourth model with real data
+(planned for v4, see below).
 
 **Tasks (3 SWE-bench Verified instances).**
 
@@ -26,11 +32,29 @@ prompt ablation (section 5), but not in the 5 x 3 grid below.
 All three are "< 15 min fix" issues with test suites that run in seconds, so a failure measures
 the agent (exploration, editing, discipline) rather than the 900 s budget.
 
-**Protocol.** `scripts/run_benchmark.sh` runs every model x task pair with the subject's limits
-(30 iterations, 300k / 10k tokens, 900 s under `timeout`), then validates the patch with the
-moulinette's own `validate()` (`scripts/validate_swebench.py`, which only patches the file copy for
-rootless Docker). `NO_FALLBACK=1` disables model switching, so each cell measures exactly one
-model. A run that dies because the provider is unavailable (quota, overload) is marked
+**Coverage of the exam pool.** The evaluation draws its SWE-bench tasks from a pool of 6 instances:
+`django__django-11066`, `pydata__xarray-4629`, `scikit-learn__scikit-learn-13439`,
+`sympy__sympy-13480`, `sympy__sympy-18189` and `sympy__sympy-14711`. v1 to v3 only cover 3 of
+them. With 3 tasks drawn from 6, the probability that at least 2 of the 3 are untested is
+(C(3,2)·C(3,1) + C(3,3)) / C(6,3) = 10 / 20 = **1 / 2**. v4 therefore adds
+`django__django-11066`, `scikit-learn__scikit-learn-13439` and `sympy__sympy-18189`, run with
+`qwen/qwen3.8-27b`, `openai/gpt-oss-120b`, `gemini-3.5-flash-lite` and `codestral-2508`.
+
+**Protocol.** Every model x task pair is run with the subject's limits (30 iterations,
+300k / 10k tokens, 900 s under `timeout`):
+
+```sh
+NO_FALLBACK=1 timeout 900 uv run python -m agent_swebench \
+    --task-file BENCHMARK/tasks/<task>.json --model-name <model> \
+    --output BENCHMARK/<version>/<model>/<task>/solution.json
+moulinette_eval validate swebench BENCHMARK/tasks/<task>.json \
+    BENCHMARK/<version>/<model>/<task>/solution.json
+```
+
+The verdict is PASS when the moulinette reports `RESOLVED_FULL`. (The helper scripts that looped
+over the grid and built the tables below were removed from the repository with the other
+non-mandatory files; the raw runs stay in `BENCHMARK/v1..v3`.) `NO_FALLBACK=1` disables model
+switching, so each cell measures exactly one model. A run that dies because the provider is unavailable (quota, overload) is marked
 **INDISPO**, gets no verdict and is retried on the next launch.
 
 - **v1**: first version (regex extraction, immediate abort on provider errors, backoff on 429).
@@ -262,6 +286,23 @@ from the moulinette), same models, only the system prompt changes. Runs are in
 - For **qwen** both prompts solve everything; the explicit one needs fewer iterations (2.2 vs 2.8)
   and fewer output tokens, for ~270 more input tokens per task (the longer prompt is re-sent at
   every request), well within the 6000-token MBPP budget.
+
+**Why the ablation is on MBPP and not on SWE-bench.**
+
+- *It isolates one variable.* On MBPP a run takes ~3 iterations and a few seconds, and the verdict
+  is the task's own asserts. On SWE-bench the noise is larger than the effect being measured:
+  in v2, 7 of 15 cells were INDISPO (quota / overload) and two v3 cells failed on the 900 s
+  timeout. A prompt change cannot be read through that.
+- *The mechanism tested is the same in both prompts.* What made the difference for codestral is
+  the rule "run the tests, submit only after seeing success". `SYSTEM_PROMPT_SWEBENCH` carries the
+  same rule ("As soon as run_tests() passes, your NEXT block is only final_answer(get_patch())"),
+  with the same Thought + one code block format. The MBPP result is the controlled evidence for
+  that rule; the SWE-bench discipline metric (section 4) is where its effect shows on real repos.
+- *Cost.* 2 prompts x 2 models x 5 tasks = 20 MBPP runs fit in the free quotas in minutes. The
+  same grid on SWE-bench is 20 runs of up to 900 s each, on quotas that already made most Gemini
+  cells INDISPO.
+- *Limit, stated plainly:* the ablation shows the explicit prompt helps a weaker model follow the
+  loop; it does not prove the same size of effect on SWE-bench, where exploration dominates.
 
 v1 vs v2 is not a clean ablation (several changes at once), but it shows the effect of waiting on
 the same model instead of aborting on the first 429 / 503: qwen stayed at 3/3 and submitted one

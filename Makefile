@@ -5,12 +5,8 @@ MODEL ?= qwen/qwen3.8-27b
 
 install:
 	uv sync
-	rm -rf .env.example
+	test -f .env || cp .env.example .env
 	echo "Please edit .env file to add your API keys."
-	echo "GROQ_API_KEY=" > .env
-	echo "GEMINI_API_KEY=" >> .env
-	echo "MISTRAL_API_KEY=" >> .env
-	echo "TESTBED_PATH=" >> .env
 
 run:
 	uv run -m src

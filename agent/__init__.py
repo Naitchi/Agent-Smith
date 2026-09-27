@@ -38,6 +38,7 @@ from src.display_func import show_error, show_summary
 from src.sandbox import Sandbox
 
 PROCESS_START = time.monotonic()
+CHAT_COMPLETIONS_PATH = "/chat/completions"
 
 __all__ = [
     "MBPP_LIMITS",
@@ -56,6 +57,7 @@ __all__ = [
     "SandboxConfig",
     "SandboxProtocol",
     "build_user_prompt",
+    "chat_completions_url",
     "check_api_key",
     "default_conf",
     "load_task",
@@ -73,6 +75,14 @@ def is_http_url(value: str) -> bool:
     """Return True if `value` is an http(s) URL with a host."""
     url = urlparse(value)
     return url.scheme in ("http", "https") and bool(url.netloc)
+
+
+def chat_completions_url(url: str) -> str:
+    """Append /chat/completions to a base URL such as .../openai/v1."""
+    url = url.rstrip("/")
+    if url.endswith(CHAT_COMPLETIONS_PATH):
+        return url
+    return url + CHAT_COMPLETIONS_PATH
 
 
 def parse_args(prog: str) -> argparse.Namespace:
@@ -102,6 +112,8 @@ def parse_args(prog: str) -> argparse.Namespace:
             parser.error(f"{option}: not an http(s) URL: {value!r}")
     if args.mcp_stdio is not None and not args.mcp_stdio.strip():
         parser.error("--mcp-stdio: empty command")
+    if args.provider_url is not None:
+        args.provider_url = chat_completions_url(args.provider_url)
     return args
 
 
@@ -190,7 +202,12 @@ def default_conf(model_name: str | None, provider_url: str | None,
 
 
 def write_output(out: SolutionOutput, path: Path) -> None:
-    """Write the solution as JSON, creating parent directories."""
+    """Write the solution as JSON, creating parent directories.
+
+    total_time_seconds is reset here so it covers the whole process
+    (imports, Docker, MCP start-up, patch fallback), not only the loop.
+    """
+    out.total_time_seconds = time.monotonic() - PROCESS_START
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(out.model_dump_json(indent=2))
