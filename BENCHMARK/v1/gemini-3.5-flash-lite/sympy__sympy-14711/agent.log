@@ -1,0 +1,20 @@
+Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+429 rate limit -> token 2/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 3/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 4/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 5/5 sur gemini-3.5-flash-lite
+429 -> attente 2 s sur gemini-3.5-flash-lite (NO_BASCULE)
+429 rate limit -> token 2/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 3/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 4/5 sur gemini-3.5-flash-lite
+429 rate limit -> token 5/5 sur gemini-3.5-flash-lite
+429 -> attente 4 s sur gemini-3.5-flash-lite (NO_BASCULE)
+Disconnected from MCP server.
+
+============================================================
+success    : False
+solution   : "diff --git a/sympy/physics/vector/vector.py b/sympy/physics/vector/vector.py\nindex a048ee57f..9b5b52539 100644\n--- a/sympy/physics/vector/vector.py\n+++ b/sympy/physics/vector/vector.py\n@@ -721,6 +721,8 @@ def __init__(self, other, want):\n \n \n def _check_vector(other):\n-    if not isinstance(other, Vector):\n-        raise TypeError('A Vector must be supplied')\n-    return other\n+    if isinstance(other, Vector):\n+        return other\n+    if other == 0:\n+        return Vector(0)\n+    raise TypeError('A Vector must be supplied')\n"
+iterations : 30   requests: 44
+tokens     : 271160/300000 in / 2068/10000 out
+temps      : 143.0/900 s
+error      : max_iterations reached without final_answer (30)

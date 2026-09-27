@@ -1,0 +1,30 @@
+image absente, pull de swebench/sweb.eval.x86_64.pydata_1776_xarray-4629:latest...
+Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+429 rate limit -> token 2/5 sur gemini-3.5-flash
+429 rate limit -> token 3/5 sur gemini-3.5-flash
+429 rate limit -> token 4/5 sur gemini-3.5-flash
+429 rate limit -> token 5/5 sur gemini-3.5-flash
+429 -> attente 2 s sur gemini-3.5-flash (NO_BASCULE)
+429 rate limit -> token 2/5 sur gemini-3.5-flash
+429 rate limit -> token 3/5 sur gemini-3.5-flash
+429 rate limit -> token 4/5 sur gemini-3.5-flash
+429 rate limit -> token 5/5 sur gemini-3.5-flash
+429 -> attente 4 s sur gemini-3.5-flash (NO_BASCULE)
+429 rate limit -> token 2/5 sur gemini-3.5-flash
+429 rate limit -> token 3/5 sur gemini-3.5-flash
+429 rate limit -> token 4/5 sur gemini-3.5-flash
+429 rate limit -> token 5/5 sur gemini-3.5-flash
+429 -> attente 8 s sur gemini-3.5-flash (NO_BASCULE)
+429 rate limit -> token 2/5 sur gemini-3.5-flash
+429 rate limit -> token 3/5 sur gemini-3.5-flash
+429 rate limit -> token 4/5 sur gemini-3.5-flash
+429 rate limit -> token 5/5 sur gemini-3.5-flash
+Disconnected from MCP server.
+
+============================================================
+success    : False
+solution   : ''
+iterations : 2   requests: 22
+tokens     : 7378/300000 in / 123/10000 out
+temps      : 85.1/900 s
+error      : plus aucun modele disponible, 1 ecartes -> gemini-3.5-flash (429, NO_BASCULE)

@@ -7,3 +7,7 @@ evaluations/
 .data.txt
 solution.json
 !BENCHMARK/**/solution.json
+<<<<<<< HEAD
+=======
+moulinette/
+>>>>>>> main

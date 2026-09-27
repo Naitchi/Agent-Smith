@@ -1,0 +1,14 @@
+Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+reseau -> attente 2 s sur gemini-3.5-flash (NO_BASCULE)
+503 -> attente 2 s sur gemini-3.5-flash (NO_BASCULE)
+reseau -> attente 4 s sur gemini-3.5-flash (NO_BASCULE)
+503 -> attente 8 s sur gemini-3.5-flash (NO_BASCULE)
+Disconnected from MCP server.
+
+============================================================
+success    : False
+solution   : ''
+iterations : 3   requests: 8
+tokens     : 4147/300000 in / 216/10000 out
+temps      : 227.8/900 s
+error      : plus aucun modele disponible, 1 ecartes -> gemini-3.5-flash (503, NO_BASCULE)

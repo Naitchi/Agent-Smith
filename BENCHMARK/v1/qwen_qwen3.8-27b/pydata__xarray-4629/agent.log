@@ -1,0 +1,38 @@
+Connected to MCP server: name='SWEBench-tools' title=None version='' description=None website_url=None icons=None
+429 rate limit -> token 2/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 3/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 4/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 5/5 sur qwen/qwen3.8-27b
+429 -> attente 9 s sur qwen/qwen3.8-27b (NO_BASCULE)
+429 rate limit -> token 2/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 3/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 4/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 5/5 sur qwen/qwen3.8-27b
+429 -> attente 30 s sur qwen/qwen3.8-27b (NO_BASCULE)
+429 rate limit -> token 2/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 3/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 4/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 5/5 sur qwen/qwen3.8-27b
+429 -> attente 12 s sur qwen/qwen3.8-27b (NO_BASCULE)
+429 rate limit -> token 2/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 3/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 4/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 5/5 sur qwen/qwen3.8-27b
+429 -> attente 30 s sur qwen/qwen3.8-27b (NO_BASCULE)
+429 rate limit -> token 2/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 3/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 4/5 sur qwen/qwen3.8-27b
+429 rate limit -> token 5/5 sur qwen/qwen3.8-27b
+429 -> attente 14 s sur qwen/qwen3.8-27b (NO_BASCULE)
+HTTP Error: 413 Payload Too Large qwen/qwen3.8-27b : {"error":{"message":"Request too large for model `qwen/qwen3.8-27b` in organization `org_01m0tjpn8febrr9733hzgz4zdm` service tier `on_demand` on input tokens per minute (ITPM): Limit 7000, Requested 8451, please reduce your message size and try again. Need more tokens? Upgrade to Dev Tier today at h
+HTTP Error: 413 Payload Too Large qwen/qwen3.8-27b : {"error":{"message":"Request too large for model `qwen/qwen3.8-27b` in organization `org_01m0tjpn8febrr9733hzgz4zdm` service tier `on_demand` on input tokens per minute (ITPM): Limit 7000, Requested 8451, please reduce your message size and try again. Need more tokens? Upgrade to Dev Tier today at h
+HTTP Error: 413 Payload Too Large qwen/qwen3.8-27b : {"error":{"message":"Request too large for model `qwen/qwen3.8-27b` in organization `org_01m0tjpn8febrr9733hzgz4zdm` service tier `on_demand` on input tokens per minute (ITPM): Limit 7000, Requested 8451, please reduce your message size and try again. Need more tokens? Upgrade to Dev Tier today at h
+Disconnected from MCP server.
+
+============================================================
+success    : False
+solution   : 'diff --git a/xarray/core/merge.py b/xarray/core/merge.py\nindex ca4e29b6..dff00804 100644\n--- a/xarray/core/merge.py\n+++ b/xarray/core/merge.py\n@@ -501,7 +501,7 @@ def merge_attrs(variable_attrs, combine_attrs):\n     if combine_attrs == "drop":\n         return {}\n     elif combine_attrs == "override":\n-        return variable_attrs[0]\n+        return dict(variable_attrs[0])\n     elif combine_attrs == "no_conflicts":\n         result = dict(variable_attrs[0])\n         for attrs in variable_attrs[1:]:\n'
+iterations : 5   requests: 33
+tokens     : 18591/300000 in / 265/10000 out
+temps      : 107.8/900 s
+error      : 3 erreurs consecutives, derniere -> HTTPStatusError: 413 {"error":{"message":"Request too large for model `qwen/qwen3.8-27b` in organization `org_01m0tjpn8febrr9733hzgz4zdm` service tier `on_demand` on input tokens per minute (ITPM): Limit 7000, Requested 8451, please reduce your message size and try again. Need more tokens? Upgrade to Dev Tier today at h
