@@ -161,22 +161,109 @@ of provider failures, and to draft the benchmark report from the measured data.
 
 ## System Architecture
 
+```mermaid
+flowchart TD
+
+subgraph group_agent["Agent and benchmarks"]
+  node_mbpp_cli["MBPP CLI<br/>[__main__.py]"]
+  node_swe_cli["SWE-bench CLI<br/>[__main__.py]"]
+  node_shared_cli["CLI and task helpers<br/>[__init__.py]"]
+  node_mbpp_input["MBPP task schema<br/>[mbpp_task_Input.py]"]
+  node_swe_input["SWE-bench task schema"]
+  node_agent_loop["Thought-code loop<br/>[agent_loop.py]"]
+  node_solution["Solution output schema<br/>[solution_output.py]"]
+end
+
+subgraph group_model["Model access"]
+  node_llm_registry["Provider registry<br/>[registry.py]"]
+  node_llm_provider["LLM provider<br/>[provider.py]"]
+  node_llm_rotator["Key rotation<br/>[rotator.py]"]
+end
+
+subgraph group_sandbox["Sandbox and MCP"]
+  node_sandbox["Sandbox runtime<br/>[core.py]"]
+  node_namespace["Persistent namespace<br/>[namespace.py]"]
+  node_security["Execution security<br/>[security.py]"]
+  node_mcp_bridge["MCP tool bridge<br/>[mcp_bridge.py]"]
+  node_sync_client["Synchronous MCP client<br/>[mcp_sync_client.py]"]
+  node_mcp_client["Async MCP client<br/>[mcp_client.py]"]
+end
+
+subgraph group_execution["Benchmark execution"]
+  node_mbpp_server["MBPP tool server<br/>[mcp_tools_mbpp.py]"]
+  node_swe_server["SWE-bench tool server"]
+  node_docker_manager["Task repository container<br/>[docker_manager.py]"]
+end
+
+node_user(("Benchmark operator"))
+node_llm_service(("LLM endpoint"))
+node_docker["Docker engine"]
+node_task_repo[("Task repository")]
+node_result_file["Solution JSON file"]
+
+node_user -->|"runs task"| node_mbpp_cli
+node_user -->|"runs issue"| node_swe_cli
+node_mbpp_cli -->|"uses helpers"| node_shared_cli
+node_swe_cli -->|"uses helpers"| node_shared_cli
+node_shared_cli -->|"validates task"| node_mbpp_input
+node_shared_cli -->|"validates task"| node_swe_input
+node_mbpp_cli -->|"runs loop"| node_agent_loop
+node_swe_cli -->|"runs loop"| node_agent_loop
+node_shared_cli -->|"configures model"| node_llm_registry
+node_llm_registry -->|"creates provider"| node_llm_provider
+node_llm_provider -->|"rotates keys"| node_llm_rotator
+node_llm_provider -->|"sends completion"| node_llm_service
+node_llm_service -->|"returns completion"| node_llm_provider
+node_agent_loop -->|"requests completion"| node_llm_provider
+node_agent_loop -->|"executes code"| node_sandbox
+node_sandbox -->|"runs code"| node_namespace
+node_sandbox -->|"enforces limits"| node_security
+node_sandbox -->|"bridges tool calls"| node_mcp_bridge
+node_mcp_bridge -->|"dispatches requests"| node_sync_client
+node_sync_client -->|"drives async calls"| node_mcp_client
+node_mcp_client -->|"connects MCP"| node_mbpp_server
+node_mcp_client -->|"connects MCP"| node_swe_server
+node_swe_server -->|"runs repository tools"| node_docker_manager
+node_docker_manager -->|"manages container"| node_docker
+node_docker -->|"hosts task checkout"| node_task_repo
+node_mbpp_cli -->|"builds result"| node_solution
+node_swe_cli -->|"builds result"| node_solution
+node_shared_cli -->|"writes JSON"| node_result_file
+
+click node_mbpp_cli "https://github.com/naitchi/agent-smith/blob/main/agent/agent_mbpp/__main__.py"
+click node_swe_cli "https://github.com/naitchi/agent-smith/blob/main/agent/agent_swebench/__main__.py"
+click node_shared_cli "https://github.com/naitchi/agent-smith/blob/main/agent/__init__.py"
+click node_mbpp_input "https://github.com/naitchi/agent-smith/blob/main/schemas/mbpp_task_Input.py"
+click node_swe_input "https://github.com/naitchi/agent-smith/blob/main/schemas/swe_bench_task_input.py"
+click node_agent_loop "https://github.com/naitchi/agent-smith/blob/main/src/agent_loop.py"
+click node_solution "https://github.com/naitchi/agent-smith/blob/main/schemas/solution_output.py"
+click node_llm_registry "https://github.com/naitchi/agent-smith/blob/main/llm/registry.py"
+click node_llm_provider "https://github.com/naitchi/agent-smith/blob/main/llm/provider.py"
+click node_llm_rotator "https://github.com/naitchi/agent-smith/blob/main/llm/rotator.py"
+click node_sandbox "https://github.com/naitchi/agent-smith/blob/main/src/sandbox/core.py"
+click node_namespace "https://github.com/naitchi/agent-smith/blob/main/src/sandbox/namespace.py"
+click node_security "https://github.com/naitchi/agent-smith/blob/main/src/sandbox/security.py"
+click node_mcp_bridge "https://github.com/naitchi/agent-smith/blob/main/src/sandbox/mcp_bridge.py"
+click node_sync_client "https://github.com/naitchi/agent-smith/blob/main/src/mcp_sync_client.py"
+click node_mcp_client "https://github.com/naitchi/agent-smith/blob/main/src/mcp_client.py"
+click node_mbpp_server "https://github.com/naitchi/agent-smith/blob/main/mcp_tools_mbpp.py"
+click node_swe_server "https://github.com/naitchi/agent-smith/blob/main/mcp_tools_swebench.py"
+click node_docker_manager "https://github.com/naitchi/agent-smith/blob/main/src/docker_manager.py"
+
+classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a
+classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
+classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
+classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
+classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
+classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
+classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
+class node_mbpp_cli,node_swe_cli,node_shared_cli,node_mbpp_input,node_swe_input,node_agent_loop,node_solution toneBlue
+class node_llm_registry,node_llm_provider,node_llm_rotator,node_task_repo toneAmber
+class node_sandbox,node_namespace,node_security,node_mcp_bridge,node_sync_client,node_mcp_client toneMint
+class node_mbpp_server,node_swe_server,node_docker_manager toneRose
+class node_user,node_llm_service,node_docker,node_result_file toneIndigo
 ```
-   ┌───────────────── Agent side (mobenais) ──────────┐   ┌──────── Execution side (bclairot) ────┐
-   │                                                  │   │                                       │
-   │  agent_mbpp / agent_swebench (CLI)               │   │   Sandbox                             │
-   │             │                                    │   │    ├─ security (imports, FS,          │
-   │  AgentLoop ─┼─ LLM provider (Groq/Gemini/Mistral)│   │    │   network, timeout, RAM)         │
-   │             ├─ extract_code()                    │   │    ├─ final_answer()                  │
-   │             └─ system prompt                     │   │    ├─ REPL `uv run sandbox`           │
-   │                                                  │   │    ├─ get_manual()                    │
-   │             ┌────── interface contract ──────────┼───┤    └─ MCPClient (stdio + HTTP)        │
-   │             │                                    │   │                                       │
-   │   sandbox.execute(code) ─────────────────────────┼──►│   mcp_tools_mbpp.py                   │
-   │   sandbox.get_manual() ──────────────────────────┼──►│   mcp_tools_swebench.py               │
-   │   ◄──────────────────────────── ExecutionResult  │   │   DockerManager                       │
-   └──────────────────────────────────────────────────┘   └───────────────────────────────────────┘
-```
+*Mermaid diagram done with [GitDiagram](https://gitdiagram.com)*
 
 The two sides only ever talk to each other through `Sandbox.execute()`,
 `Sandbox.get_manual()`, and `Sandbox.close()` — the agent loop never knows which

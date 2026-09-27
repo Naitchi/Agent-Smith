@@ -1,13 +1,20 @@
 """MCP server exposing SWE-bench tools.
 
-Bridges the 9 mandatory SWE-bench tools (subject V.5) to a long-lived
-Docker container holding the task's repository: filesystem access,
-grep-like code search, test execution, and patch generation, exposed
-over MCP via stdio or streamable HTTP.
+Bridges the 9 mandatory SWE-bench tools to the task's
+repository — filesystem access, grep-like code search, test execution and
+patch generation — exposed over MCP via stdio or streamable HTTP.
+
+The repository is reached through one of two interchangeable backends:
+a 'DockerManager' (a long-lived container started from the task's
+'docker_image') when a task is given, or a 'LocalManager' (the host
+filesystem rooted at `TESTBED_PATH`) when the server is started without
+one — the way the moulinette exercises the tools in isolation.
 """
 
 import argparse
+import ast
 import json
+import shlex
 import signal
 import sys
 from types import FrameType
@@ -16,6 +23,7 @@ from mcp.server import MCPServer
 
 from schemas.swe_bench_task_input import SWEBenchTaskInput
 from src.docker_manager import DockerManager
+from src.local_manager import LocalManager
 
 
 class MCPServerSWEBench:
@@ -25,32 +33,31 @@ class MCPServerSWEBench:
         timeout: int = 30,
         max_std_length: int = 10000,
     ):
-        """Build the MCP server, start its Docker container, register tools.
+        """Build the MCP server, start its repository backend, register tools.
 
         Args:
-            task: The SWE-bench task this server solves. Required: its
-                ``docker_image`` is used to start the container the
-                tools run against, and its ``eval_script`` backs
-                ``run_tests``.
+            task: The SWE-bench task this server solves, or None. When a
+                task is given, its ``docker_image`` backs a `DockerManager`
+                and its ``eval_script`` backs ``run_tests``. When it is
+                None, a `LocalManager` runs the tools against the host
+                repository at ``TESTBED_PATH`` (tools-in-isolation mode).
             timeout: Wall-clock limit, in seconds, for one command
-                executed inside the container before it is killed.
+                executed against the repository before it is killed.
             max_std_length: Maximum number of characters of captured
                 stdout/stderr kept in a tool's result before truncation.
 
         Raises:
-            ValueError: If no task was provided — there is no Docker
-                image to build the container from.
+            RuntimeError: In isolation mode, if ``TESTBED_PATH`` is unset.
         """
         self.timeout_timer = timeout
         self.max_std_length = max_std_length
         self.task = task
         self.mcp = MCPServer("SWEBench-tools")
+        self.repo: DockerManager | LocalManager
         if self.task:
-            self.docker_manager = DockerManager(
-                self.task.docker_image,
-            )
+            self.repo = DockerManager(self.task.docker_image, timeout)
         else:
-            raise ValueError("Task must be provided to initialize the server.")
+            self.repo = LocalManager(timeout)
         self.register_tools()
         self.register_resources()
         self.register_prompts()
@@ -117,8 +124,30 @@ class MCPServerSWEBench:
         """
         return grep_command + " | sed -E 's/^([^:]+:[0-9]+):/\\1 /'"
 
+    @staticmethod
+    def _python_syntax_error(filepath: str, content: str) -> str | None:
+        """Return a syntax-error message if `content` is invalid Python.
+
+        Args:
+            filepath: Path of the file, used only to decide whether the
+                content is Python (``.py``); non-Python files are skipped.
+            content: The file's new content after an edit.
+
+        Returns:
+            A one-line ``SyntaxError`` description (message plus line
+            number) when `filepath` is a ``.py`` file that no longer
+            parses, or None otherwise.
+        """
+        if not filepath.endswith(".py"):
+            return None
+        try:
+            ast.parse(content)
+        except SyntaxError as e:
+            return f"{e.msg} (line {e.lineno})"
+        return None
+
     def register_tools(self) -> None:
-        """Register the 9 mandatory SWE-bench MCP tools (subject V.5).
+        """Register the 9 mandatory SWE-bench MCP tools.
 
         Registers:
             read_file: Read a file's content with line numbers (cat -n).
@@ -152,14 +181,15 @@ class MCPServerSWEBench:
                 or an error message (with exit code/stderr) if the
                 file is missing.
             """
+            path = shlex.quote(filepath)
             if end_line is None:
                 return self._format_result(
-                    *self.docker_manager.exec(f"cat -n {filepath}")
+                    *self.repo.exec(f"cat -n {path}")
                 )
             else:
                 return self._format_result(
-                    *self.docker_manager.exec(
-                        f"cat -n {filepath} | sed -n "
+                    *self.repo.exec(
+                        f"cat -n {path} | sed -n "
                         f"'{start_line},{end_line}p'"
                     )
                 )
@@ -179,9 +209,11 @@ class MCPServerSWEBench:
                 A success message naming the replacement made, or an
                 explicit error message if the file is missing, if
                 old_str does not occur in it, or if it occurs more
-                than once (ambiguous).
+                than once (ambiguous). When the edited file is Python and
+                the change introduces a syntax error, the replacement is
+                kept but the message flags the error.
             """
-            _, file, _ = self.docker_manager.exec(f"cat {filepath}")
+            _, file, _ = self.repo.exec(f"cat {shlex.quote(filepath)}")
             if file is None:
                 return f"Error: File {filepath} not found."
             occurence = file.count(old_str)
@@ -193,11 +225,18 @@ class MCPServerSWEBench:
                     f"{filepath}. Please specify a unique string to replace."
                 )
             file = file.replace(old_str, new_str)
-            self.docker_manager.replace_file(filepath, file.encode())
-            return (
+            self.repo.replace_file(filepath, file.encode())
+            message = (
                 f"Successfully replaced '{old_str}' with '{new_str}' in"
                 f" {filepath}."
             )
+            syntax_error = self._python_syntax_error(filepath, file)
+            if syntax_error:
+                message += (
+                    f"\nWarning: {filepath} now has a syntax error: "
+                    f"{syntax_error}. Fix it before running the tests."
+                )
+            return message
 
         @self.mcp.tool()
         def list_files(directory: str, pattern: str = "*") -> str:
@@ -212,11 +251,10 @@ class MCPServerSWEBench:
                 One matching path per line, or an error message on
                 failure.
             """
-            return self._format_result(
-                *self.docker_manager.exec(
-                    f"find {directory} -name '{pattern}'"
-                )
+            command = (
+                f"find {shlex.quote(directory)} -name {shlex.quote(pattern)}"
             )
+            return self._format_result(*self.repo.exec(command))
 
         @self.mcp.tool()
         def search_code(pattern: str, file_pattern: str = "*") -> str:
@@ -232,12 +270,12 @@ class MCPServerSWEBench:
                 ``/absolute/path.py:<line_number> <line_content>``,
                 or an error message if nothing matched.
             """
-            root = self.docker_manager.workdir
+            root = shlex.quote(self.repo.workdir)
             return self._format_result(
-                *self.docker_manager.exec(
+                *self.repo.exec(
                     self._grep_to_spec_format(
-                        f"grep -rnwI --exclude-dir=.git '{pattern}'"
-                        f" --include='{file_pattern}' {root}"
+                        f"grep -rnwI --exclude-dir=.git {shlex.quote(pattern)}"
+                        f" --include={shlex.quote(file_pattern)} {root}"
                     )
                 )
             )
@@ -256,12 +294,14 @@ class MCPServerSWEBench:
                 search_code, or an error message if no definition
                 was found.
             """
-            root = self.docker_manager.workdir
+            root = shlex.quote(self.repo.workdir)
+            def_pat = shlex.quote(f"def {name}")
+            class_pat = shlex.quote(f"class {name}")
             return self._format_result(
-                *self.docker_manager.exec(
+                *self.repo.exec(
                     self._grep_to_spec_format(
-                        f"grep -rnwI --exclude-dir=.git -e 'def {name}'"
-                        f" -e 'class {name}' --include='*.py' {root}"
+                        f"grep -rnwI --exclude-dir=.git -e {def_pat}"
+                        f" -e {class_pat} --include='*.py' {root}"
                     )
                 )
             )
@@ -281,35 +321,39 @@ class MCPServerSWEBench:
                 search_code, or an error message if no reference was
                 found.
             """
-            root = self.docker_manager.workdir
+            root = self.repo.workdir
             full_path = (
                 filepath if filepath.startswith("/") else f"{root}/{filepath}"
             )
+            exclude = shlex.quote(f"^{full_path}:{line}:")
             return self._format_result(
-                *self.docker_manager.exec(
+                *self.repo.exec(
                     self._grep_to_spec_format(
-                        f"grep -rnwI --exclude-dir=.git '{name}' {root}"
-                        f" | grep -v '^{full_path}:{line}:'"
+                        f"grep -rnwI --exclude-dir=.git {shlex.quote(name)}"
+                        f" {shlex.quote(root)} | grep -v {exclude}"
                     )
                 )
             )
 
         @self.mcp.tool()
         def run_tests() -> str:
-            """Execute the task's evaluation script inside the container.
+            """Execute the task's evaluation script against the repository.
 
             Returns:
                 The captured stdout/stderr and exit code of
                 eval_script — a clean run typically means the fix (if
-                any) resolved the issue.
-
-            Raises:
-                ValueError: If the server was built without a task.
+                any) resolved the issue. When the server was started
+                without a task (isolation mode), there is no eval_script,
+                so an explicit message is returned instead.
             """
             if not self.task:
-                raise ValueError("Task must be provided to run tests.")
+                return (
+                    "Error: run_tests is unavailable without a task "
+                    "(no eval_script); the server was started in isolation "
+                    "mode."
+                )
             return self._format_result(
-                *self.docker_manager.exec(self.task.eval_script)
+                *self.repo.exec(self.task.eval_script)
             )
 
         @self.mcp.tool()
@@ -317,13 +361,11 @@ class MCPServerSWEBench:
             """Retrieve the unified git diff of all changes made so far.
 
             Returns:
-                The output of ``git -c core.fileMode=false diff`` —
-                exactly the format the subject requires for a
-                submitted patch — or ``"(no output)"`` if nothing has
+                the git diff or ``"(no output)"`` if nothing has
                 been changed yet.
             """
             return self._format_result(
-                *self.docker_manager.exec("git -c core.fileMode=false diff")
+                *self.repo.exec("git -c core.fileMode=false diff")
             )
 
         @self.mcp.tool()
@@ -341,7 +383,7 @@ class MCPServerSWEBench:
                 into one string.
             """
             return self._format_result(
-                *self.docker_manager.exec(command, workdir=workdir)
+                *self.repo.exec(command, workdir=workdir)
             )
 
     def register_resources(self) -> None:
@@ -402,14 +444,16 @@ class MCPServerSWEBench:
             )
 
     def close(self) -> None:
-        """Tear down the Docker container backing this server.
+        """Tear down the repository backend of this server.
 
-        Safe to call more than once. Wired to SIGTERM/SIGINT in
-        ``__main__`` so cleanup still runs when the process is
-        force-killed mid-task (subject VI.1.1).
+        Safe to call more than once (`cleanup()` is idempotent). Wired to
+        SIGTERM/SIGINT in ``__main__`` so container cleanup still runs when
+        the process is force-killed mid-task; a no-op for
+        the local backend.
         """
-        if getattr(self, "docker_manager", None) is not None:
-            self.docker_manager.cleanup()
+        repo = getattr(self, "repo", None)
+        if repo is not None:
+            repo.cleanup()
 
 
 if __name__ == "__main__":
@@ -447,13 +491,11 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Error loading task file: {e}", file=sys.stderr)
             sys.exit(1)
-    if task is None:
-        print(
-            "Error: --task-file is required to start this server.",
-            file=sys.stderr,
-        )
+    try:
+        server = MCPServerSWEBench(task=task)
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
         sys.exit(1)
-    server = MCPServerSWEBench(task=task)
 
     def _handle_termination(signum: int, frame: FrameType | None) -> None:
         server.close()

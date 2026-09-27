@@ -231,7 +231,8 @@ class Sandbox(
             tool_docs: Tool name -> description, propagated onto each
                 proxy's `__doc__` (see `_make_tool_proxy`).
         """
-        socket.socket = self._blocked_call  # type: ignore[misc, assignment]
+        socket_module: Any = socket
+        socket_module.socket = self._blocked_call
         signal.signal(signal.SIGTERM, self._timeout_handler)
         limit_bytes = self.config.max_memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
@@ -279,6 +280,7 @@ class Sandbox(
         result = ExecutionResult()
         with redirect_stdout(temp_stdout), redirect_stderr(temp_stderr):
             try:
+                self._install_audit_hook()
                 exec(code, namespace)
             except self._FinalAnswer as fa:
                 try:

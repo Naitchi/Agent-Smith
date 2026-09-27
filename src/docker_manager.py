@@ -83,7 +83,7 @@ class DockerManager:
             repeatedly instead of restarted per tool call.
         """
         return self.client.containers.run(
-            self.image, command="tail -f /dev/null", detach=True
+            self.image, command="tail -f /dev/null", detach=True, init=True
         )
 
     def pull_image(self):
@@ -217,18 +217,35 @@ class DockerManager:
 
     def stop_container(self):
         """Stop the running container (does not remove it)."""
-        self.container.stop()
+        if self.container:
+            self.container.stop()
 
     def remove_container(self):
         """Remove the (stopped) container."""
-        self.container.remove()
+        if self.container:
+            self.container.remove()
 
     def cleanup(self):
-        """Stop and remove the container.
+        """Force-remove the container, quickly and idempotently.
 
-        Safe to call from a signal handler — see
-        `MCPServerSWEBench.close()`, which the subject requires to run
-        even when the process is force-killed on timeout.
+        Uses ``remove(force=True)`` — a single fast API call that kills and
+        removes the container in one step — rather than ``stop()`` then
+        ``remove()``. This matters because the MCP SDK gives the server only
+        a couple of seconds between SIGTERM and SIGKILL when it shuts down;
+        the graceful ``stop()`` path waits ~10 s for the ``tail`` PID 1 and
+        would be cut off by SIGKILL before ``remove()`` ran, leaving an
+        orphan container.
+
+        Idempotent and safe to call more than once, and from a signal
+        handler: a ``_closed`` flag makes a second call a no-op, and a
+        container already gone (``NotFound``) is treated as success.
         """
-        self.stop_container()
-        self.remove_container()
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        container = getattr(self, "container", None)
+        if container is not None:
+            try:
+                container.remove(force=True)
+            except errors.NotFound:
+                pass

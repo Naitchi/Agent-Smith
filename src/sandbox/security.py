@@ -16,6 +16,63 @@ from typing import IO, Any
 
 from schemas.sandbox_config import SandboxConfig
 
+DISALLOWED_ATTRS = frozenset(
+    {
+        "gi_frame",
+        "gi_code",
+        "gi_yieldfrom",
+        "cr_frame",
+        "cr_code",
+        "cr_await",
+        "cr_origin",
+        "cr_running",
+        "ag_frame",
+        "ag_code",
+        "ag_await",
+        "ag_running",
+        "f_back",
+        "f_globals",
+        "f_locals",
+        "f_builtins",
+        "f_code",
+        "f_trace",
+        "tb_frame",
+        "tb_next",
+    }
+)
+
+BLOCKED_AUDIT_EVENTS = frozenset(
+    {
+        "socket.connect",
+        "socket.bind",
+        "socket.getaddrinfo",
+        "socket.gethostbyname",
+        "socket.sethostname",
+        "os.system",
+        "os.exec",
+        "os.spawn",
+        "os.posix_spawn",
+        "subprocess.Popen",
+        "ctypes.dlopen",
+        "ctypes.dlsym",
+        "ctypes.dlsym/handle",
+        "ctypes.call_function",
+        "ctypes.set_errno",
+    }
+)
+
+PYTHON_PREFIXES = tuple(
+    dict.fromkeys(
+        os.path.realpath(path)
+        for path in (
+            sys.prefix,
+            sys.base_prefix,
+            sys.exec_prefix,
+            os.path.dirname(os.__file__),
+        )
+    )
+)
+
 
 class SandboxSecurityMixin:
     """Enforces the sandbox's import, attribute and filesystem allowlists."""
@@ -79,7 +136,7 @@ class SandboxSecurityMixin:
 
     def _restricted_open(
         self,
-        file: str,
+        file: str | bytes,
         mode: str = "r",
         buffering: int = -1,
         encoding: str | None = None,
@@ -106,7 +163,8 @@ class SandboxSecurityMixin:
                 ``/testbed/../etc/passwd`` can't escape the check) isn't
                 inside one of `config.allowed_directories`.
         """
-        real_path = os.path.realpath(file)
+        name = os.fsdecode(file)
+        real_path = os.path.realpath(name)
         for allowed_dir in self.config.allowed_directories:
             if real_path == allowed_dir or real_path.startswith(
                 f"{allowed_dir}/"
@@ -122,11 +180,24 @@ class SandboxSecurityMixin:
                     opener,
                 )
         raise PermissionError(
-            f"Error: Access to file '{file}' is not allowed."
+            f"Error: Access to file '{name}' is not allowed."
+        )
+
+    def _attr_disallowed(self, attr: str) -> bool:
+        """Return True if `attr` must not be accessed by sandbox code.
+
+        Blocks both the frame/code/traceback introspection attributes in
+        `DISALLOWED_ATTRS` and any dunder attribute not explicitly listed in
+        `config.authorized_attributes`.
+        """
+        if attr in DISALLOWED_ATTRS:
+            return True
+        return attr.startswith("__") and (
+            attr not in self.config.authorized_attributes
         )
 
     def _check_disallowed_attributes(self, node: ast.AST) -> bool:
-        """Check one AST node for a dunder-attribute sandbox escape.
+        """Check one AST node for a disallowed-attribute sandbox escape.
 
         Args:
             node: An `ast.Call` (on an attribute) or `ast.Attribute` node
@@ -136,20 +207,53 @@ class SandboxSecurityMixin:
             True if the node accesses a dunder attribute (e.g.
             ``__class__``, ``__bases__``, ``__subclasses__``) that isn't
             explicitly in `config.authorized_attributes` — the classic
-            ``().__class__.__bases__[0].__subclasses__()`` escape route.
+            ``().__class__.__bases__[0].__subclasses__()`` escape route — or
+            a frame/code introspection attribute from `DISALLOWED_ATTRS`.
         """
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr.startswith("__")
-            and node.func.attr not in self.config.authorized_attributes
-        ):
-            return True
-        return (
-            isinstance(node, ast.Attribute)
-            and node.attr.startswith("__")
-            and node.attr not in self.config.authorized_attributes
-        )
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            return self._attr_disallowed(node.func.attr)
+        if isinstance(node, ast.Attribute):
+            return self._attr_disallowed(node.attr)
+        return False
+
+    def _install_audit_hook(self) -> None:
+        """Install the process-wide audit hook backstop.
+
+        Called once inside the worker process, right before the untrusted
+        code runs. Enforces the filesystem allowlist on every `open` (not
+        just the `open` builtin, so `os.open`/`pathlib` are covered too) and
+        blocks the network, process-spawn and `ctypes` audit events in
+        `BLOCKED_AUDIT_EVENTS`. Because an audit hook cannot be removed, this
+        holds for the rest of the worker's life — which is fine, the worker
+        only serializes its namespace and exits afterwards.
+        """
+        allowed = tuple(self.config.allowed_directories) + PYTHON_PREFIXES
+
+        def _open_allowed(path: Any) -> bool:
+            if isinstance(path, int):
+                return True
+            try:
+                name = os.fsdecode(path)
+            except (TypeError, ValueError):
+                return True
+            real = os.path.realpath(name)
+            return any(
+                real == directory or real.startswith(f"{directory}/")
+                for directory in allowed
+            )
+
+        def hook(event: str, args: tuple[Any, ...]) -> None:
+            if event == "open":
+                if args and not _open_allowed(args[0]):
+                    raise PermissionError(
+                        f"Error: Access to file '{args[0]}' is not allowed."
+                    )
+            elif event in BLOCKED_AUDIT_EVENTS:
+                raise PermissionError(
+                    f"Error: Operation '{event}' is disabled in the sandbox."
+                )
+
+        sys.addaudithook(hook)
 
     def _is_code_not_safe(self, code: str) -> str | None:
         """Parse `code` and scan it for disallowed dunder-attribute access.

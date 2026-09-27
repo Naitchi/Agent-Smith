@@ -7,6 +7,7 @@ Sandbox's parent process, never in the sandboxed worker — see
 bridge thread.
 """
 
+import os
 import sys
 from shlex import split
 from typing import Any
@@ -82,7 +83,9 @@ class MCPClient:
             except Exception as e:
                 print(f"Error splitting command_stdio: {e}", file=sys.stderr)
                 raise
-            server = StdioServerParameters(command=command, args=args)
+            server = StdioServerParameters(
+                command=command, args=args, env=dict(os.environ)
+            )
             params = stdio_client(server)
         elif self.url:
             params = self.url

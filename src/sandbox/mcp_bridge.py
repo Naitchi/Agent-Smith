@@ -319,9 +319,8 @@ class SandboxMCPBridgeMixin:
             generation_nb: This call's generation number (see
                 `_bridge_loop`).
             tool_param_names: Tool name -> ordered parameter names, so
-                positional arguments (e.g. `read_file("add.py", 1, 5)`,
-                the way the subject shows tool calls) can be mapped to
-                the right keyword before the request is sent.
+                positional arguments (e.g. `read_file("add.py", 1, 5)`)
+                can be mapped to the right keyword before the request is sent.
             tool_docs: Tool name -> description, used to set the
                 returned function's `__doc__`.
 
